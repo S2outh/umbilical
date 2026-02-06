@@ -1,0 +1,14 @@
+[target.thumbv7em-none-eabihf]
+runner = "./runner.sh"
+
+rustflags = [
+  "-C", "link-arg=-Tlink.x", # linker file
+  "-C", "link-arg=--nmagic", # no std memory layout
+  "-C", "link-arg=-Tdefmt.x", # add defmt
+]
+
+[build]
+target = "thumbv7em-none-eabihf"
+
+[net]
+git-fetch-with-cli = true
