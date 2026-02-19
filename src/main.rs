@@ -3,6 +3,7 @@
 
 use core::convert::Infallible;
 use core::mem::MaybeUninit;
+use core::sync::atomic::{AtomicU8, Ordering};
 use core::task::Context;
 
 use defmt::*;
@@ -31,6 +32,7 @@ type EthDriver = Ethernet<'static, peripherals::ETH, EthPhy>;
 
 static ETH_QUEUE: StaticCell<MaybeUninit<PacketQueue<8, 8>>> = StaticCell::new();
 static NET_RESOURCES: StaticCell<StackResources<8>> = StaticCell::new();
+static PHY_LINK_BITS: AtomicU8 = AtomicU8::new(0);
 
 #[embassy_executor::task]
 async fn net_task(mut runner: Runner<'static, EthDriver>) -> ! {
@@ -68,7 +70,7 @@ async fn status_task(stack: Stack<'static>) -> ! {
 }
 
 #[embassy_executor::task]
-async fn udp_heartbeat_task(stack: Stack<'static>) -> ! {
+async fn udp_heartbeat_task(stack: Stack<'static>, mut led_hb: Output<'static>) -> ! {
 	let mut rx_meta = [PacketMetadata::EMPTY; 1];
 	let mut rx_buffer = [0u8; 64];
 	let mut tx_meta = [PacketMetadata::EMPTY; 1];
@@ -91,29 +93,70 @@ async fn udp_heartbeat_task(stack: Stack<'static>) -> ! {
 
 		stack.wait_config_up().await;
 
-		match socket
-			.send_to(
+		match with_timeout(
+			Duration::from_millis(120),
+			socket.send_to(
 				b"umbilical heartbeat",
 				(Ipv4Address::new(10, 42, 0, 1), 9222),
-			)
-			.await
+			),
+		)
+		.await
 		{
-			Ok(()) => info!("Heartbeat sent to 10.42.0.1:9222"),
-			Err(err) => warn!("Heartbeat send failed: {:?}", err),
+			Ok(Ok(())) => info!("Heartbeat sent to 10.42.0.1:9222"),
+			Ok(Err(err)) => warn!("Heartbeat send failed: {:?}", err),
+			Err(_) => warn!("Heartbeat send timed out"),
 		}
 
-		match socket
-			.send_to(
+		match with_timeout(
+			Duration::from_millis(120),
+			socket.send_to(
 				b"umbilical heartbeat bcast",
 				(Ipv4Address::new(10, 42, 0, 255), 9222),
-			)
-			.await
+			),
+		)
+		.await
 		{
-			Ok(()) => info!("Heartbeat broadcast sent to 10.42.0.255:9222"),
-			Err(err) => warn!("Heartbeat broadcast failed: {:?}", err),
+			Ok(Ok(())) => info!("Heartbeat broadcast sent to 10.42.0.255:9222"),
+			Ok(Err(err)) => warn!("Heartbeat broadcast failed: {:?}", err),
+			Err(_) => warn!("Heartbeat broadcast timed out"),
 		}
 
+		led_hb.set_high();
+		Timer::after(Duration::from_millis(60)).await;
+		led_hb.set_low();
+
 		Timer::after(Duration::from_secs(1)).await;
+	}
+}
+
+#[embassy_executor::task]
+async fn phy_led_task(
+	mut led_phy1: Output<'static>,
+	mut led_phy2: Output<'static>,
+	mut led_phy3: Output<'static>,
+) -> ! {
+	loop {
+		let bits = PHY_LINK_BITS.load(Ordering::Relaxed);
+
+		if (bits & (1 << 0)) != 0 {
+			led_phy1.set_high();
+		} else {
+			led_phy1.set_low();
+		}
+
+		if (bits & (1 << 1)) != 0 {
+			led_phy2.set_high();
+		} else {
+			led_phy2.set_low();
+		}
+
+		if (bits & (1 << 2)) != 0 {
+			led_phy3.set_high();
+		} else {
+			led_phy3.set_low();
+		}
+
+		Timer::after(Duration::from_millis(100)).await;
 	}
 }
 
@@ -207,6 +250,10 @@ async fn udp_rx_probe_task(stack: Stack<'static>) -> ! {
 async fn main(spawner: Spawner) -> ! {
 	let p = embassy_stm32::init(Default::default());
 	let mut ksz_reset = Output::new(p.PB0, Level::High, Speed::Low);
+	let led_phy1 = Output::new(p.PD12, Level::Low, Speed::Low);
+	let led_phy2 = Output::new(p.PD13, Level::Low, Speed::Low);
+	let led_phy3 = Output::new(p.PD14, Level::Low, Speed::Low);
+	let led_hb = Output::new(p.PD15, Level::Low, Speed::Low);
 
 	info!("Pulsing KSZ8863 reset on PB0...");
 	Timer::after(Duration::from_millis(2)).await;
@@ -254,9 +301,10 @@ async fn main(spawner: Spawner) -> ! {
 
 	unwrap!(spawner.spawn(net_task(runner)));
 	unwrap!(spawner.spawn(status_task(stack)));
-	unwrap!(spawner.spawn(udp_heartbeat_task(stack)));
+	unwrap!(spawner.spawn(udp_heartbeat_task(stack, led_hb)));
 	unwrap!(spawner.spawn(tcp_server_task(stack)));
 	unwrap!(spawner.spawn(udp_rx_probe_task(stack)));
+	unwrap!(spawner.spawn(phy_led_task(led_phy1, led_phy2, led_phy3)));
 
 	loop {
 		let _ = &ksz_reset;
@@ -380,6 +428,7 @@ impl<SM: StationManagement> Ksz8863Phy<SM> {
 	fn diag_ports(&mut self) {
 		let port_phys = self.port_phys;
 		let n = self.port_phys_count;
+		let mut link_bits = 0u8;
 		for phy_addr in port_phys[..n].iter().copied() {
 			let id1 = self.sm.smi_read(phy_addr, 0x02);
 			let id2 = self.sm.smi_read(phy_addr, 0x03);
@@ -387,6 +436,10 @@ impl<SM: StationManagement> Ksz8863Phy<SM> {
 			let bsr2_raw = self.sm.smi_read(phy_addr, 0x01);
 			let link = (bsr2_raw & (1 << 2)) != 0;
 			let an_done = (bsr2_raw & (1 << 5)) != 0;
+
+			if link && (1..=3).contains(&phy_addr) {
+				link_bits |= 1 << (phy_addr - 1);
+			}
 
 			info!(
 				"PHY {} id1={} id2={} bsr1={} bsr2={} link={} an_done={}",
@@ -399,6 +452,8 @@ impl<SM: StationManagement> Ksz8863Phy<SM> {
 				an_done,
 			);
 		}
+
+		PHY_LINK_BITS.store(link_bits, Ordering::Relaxed);
 	}
 }
 
