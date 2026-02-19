@@ -12,6 +12,8 @@ PB11 47 ETH_TX_EN (50ohm)
 PB12 51 ETH_TXD0 (50ohm)
 PB13 52 ETH_TXD1 (50ohm)
 
+PB0 34 Switch_NRST 47
+
 
 Other switch pins
 6 11.8k Pulldown
