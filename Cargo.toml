@@ -24,6 +24,8 @@ cortex-m-rt = "0.7.5"
 
 heapless = { version = "0.9", default-features = false }
 static_cell = { version = "2.1.1", features = ["nightly"] }
+ksz8863 = "0.2"
+mdio = "0.1"
 
 [profile.release]
 debug = 2
