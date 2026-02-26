@@ -432,22 +432,22 @@ impl<SM: StationManagement> Ksz8863Phy<SM> {
 		for phy_addr in port_phys[..n].iter().copied() {
 			let id1 = self.sm.smi_read(phy_addr, 0x02);
 			let id2 = self.sm.smi_read(phy_addr, 0x03);
-			let bsr1_raw = self.sm.smi_read(phy_addr, 0x01);
-			let bsr2_raw = self.sm.smi_read(phy_addr, 0x01);
-			let link = (bsr2_raw & (1 << 2)) != 0;
-			let an_done = (bsr2_raw & (1 << 5)) != 0;
+			let bsr_raw = self.sm.smi_read(phy_addr, 0x01); // status register
+			let bcr_raw = self.sm.smi_read(phy_addr, 0x00); // config register
+			let link = (bsr_raw & (1 << 2)) != 0;
+			let an_done = (bsr_raw & (1 << 5)) != 0;
 
 			if link && (1..=3).contains(&phy_addr) {
 				link_bits |= 1 << (phy_addr - 1);
 			}
 
 			info!(
-				"PHY {} id1={} id2={} bsr1={} bsr2={} link={} an_done={}",
+				"PHY {} id1={} id2={} config={:b} status={:b} link={} an_done={}",
 				phy_addr,
 				id1,
 				id2,
-				bsr1_raw,
-				bsr2_raw,
+				bcr_raw,
+				bsr_raw,
 				link,
 				an_done,
 			);
@@ -478,10 +478,11 @@ impl<SM: StationManagement> Phy for Ksz8863Phy<SM> {
 			for phy_addr in port_phys[..n].iter().copied() {
 				let mut phy = bus.phy(phy_addr);
 
+				// Config link to STM
 				if phy_addr == 3 {
 					let _ = phy.bcr().write(|w| {
 						w.an_enable()
-							.clear_bit()
+							.clear_bit()// Disable Auto-Link-Negotiation if setting speed manually
 							.force_100()
 							.set_bit()
 							.force_fd()
@@ -492,12 +493,15 @@ impl<SM: StationManagement> Phy for Ksz8863Phy<SM> {
 							.clear_bit()
 					});
 					info!("Configured PHY {} as forced 100M/full-duplex", phy_addr);
+				// Config 2 external conns
 				} else {
 					let _ = phy.bcr().modify(|w| {
 						w.an_enable()
-							.set_bit()
+							.clear_bit()
 							.restart_an()
 							.set_bit()
+							.force_100()
+							.clear_bit() // 10BASE-T is more stable than 100BASE-T
 							.power_down()
 							.clear_bit()
 							.disable_transmit()
