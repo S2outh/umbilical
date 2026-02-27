@@ -19,7 +19,6 @@ use embassy_stm32::eth::{Ethernet, PacketQueue, Phy, Sma, StationManagement};
 use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_stm32::peripherals;
 use embassy_time::{Duration, Instant, Timer, with_timeout};
-use ksz8863::miim;
 use panic_probe as _;
 use static_cell::StaticCell;
 
@@ -268,7 +267,7 @@ async fn main(spawner: Spawner) -> ! {
     let packet_queue = unsafe { packet_queue.assume_init_mut() };
 
     let sm = Sma::new(p.ETH_SMA, p.PA2, p.PC1);
-    let phy = Ksz8863Phy::new(sm, miim::DEFAULT_PHY_ADDRS);
+    let phy = Ksz8863Phy::new(sm);
 
     let mac_addr = [0x02, 0x00, 0x00, 0x88, 0x63, 0x01];
     let eth = Ethernet::new_with_phy(
@@ -314,8 +313,6 @@ async fn main(spawner: Spawner) -> ! {
 
 struct Ksz8863Phy<SM: StationManagement> {
     sm: SM,
-    port_phys: [u8; 4],
-    port_phys_count: usize,
     poll_interval: Duration,
     next_poll_at: Instant,
     next_diag_at: Instant,
@@ -323,15 +320,9 @@ struct Ksz8863Phy<SM: StationManagement> {
 }
 
 impl<SM: StationManagement> Ksz8863Phy<SM> {
-    fn new(sm: SM, port_phys: [u8; 2]) -> Self {
-        let mut phy_addrs = [u8::MAX; 4];
-        phy_addrs[0] = port_phys[0];
-        phy_addrs[1] = port_phys[1];
-
+    fn new(sm: SM) -> Self {
         Self {
             sm,
-            port_phys: phy_addrs,
-            port_phys_count: 2,
             poll_interval: Duration::from_millis(300),
             next_poll_at: Instant::from_ticks(0),
             next_diag_at: Instant::from_ticks(0),
@@ -339,95 +330,24 @@ impl<SM: StationManagement> Ksz8863Phy<SM> {
         }
     }
 
-    fn scan_phys(&mut self) {
-        let mut found = [u8::MAX; 4];
-        let mut idx = 0usize;
-
-        for addr in 0u8..32 {
-            let id1 = self.sm.smi_read(addr, 0x02);
-            let id2 = self.sm.smi_read(addr, 0x03);
-
-            if id1 == 0 || id1 == 0xFFFF {
-                continue;
-            }
-
-            info!("PHY probe addr={} id1={} id2={}", addr, id1, id2);
-
-            if id1 == 0x0022 && (id2 & 0xFFF0) == 0x1430 && idx < found.len() {
-                found[idx] = addr;
-                idx += 1;
-            }
-        }
-
-        if idx >= 2 {
-            self.port_phys = found;
-            self.port_phys_count = idx;
-            info!(
-                "Using {} KSZ PHY addrs: {}, {}, {}, {}",
-                self.port_phys_count,
-                self.port_phys[0],
-                self.port_phys[1],
-                self.port_phys[2],
-                self.port_phys[3]
-            );
-        } else {
-            warn!(
-                "KSZ PHY auto-detect incomplete (found {}), keeping defaults {}, {}",
-                idx, self.port_phys[0], self.port_phys[1]
-            );
-            self.port_phys_count = 2;
-        }
-    }
-
-    fn read_link_latched(&mut self, phy_addr: u8) -> bool {
-        self.with_miim(|bus| {
-            let mut phy = bus.phy(phy_addr);
-            let _ = phy.bsr().read();
-            let bsr = match phy.bsr().read() {
-                Ok(v) => v,
-                Err(err) => match err {},
-            };
-            bsr.read().link_status().bit_is_set()
-        })
-    }
-
-    fn with_miim<R>(&mut self, f: impl FnOnce(&mut ksz8863::Miim<KszMiim<'_, SM>>) -> R) -> R {
-        let iface = KszMiim { sm: &mut self.sm };
-        let mut miim_bus = ksz8863::Miim(iface);
-        f(&mut miim_bus)
+    fn with_smi<R>(&mut self, f: impl FnOnce(&mut ksz8863::Smi<KszSmi<'_, SM>>) -> R) -> R {
+        let iface = KszSmi { sm: &mut self.sm };
+        let mut smi_bus = ksz8863::Smi(iface);
+        f(&mut smi_bus)
     }
 
     fn any_port_link_up(&mut self) -> bool {
-        let port_phys = self.port_phys;
-        let n = self.port_phys_count;
-        let mut ext_link = false;
-        let mut cpu_link = false;
-
-        for phy_addr in port_phys[..n].iter().copied() {
-            let up = self.read_link_latched(phy_addr);
-            if !up {
-                continue;
-            }
-
-            if phy_addr == 3 {
-                cpu_link = true;
-            } else {
-                ext_link = true;
-            }
-        }
-
-        if !ext_link && cpu_link {
-            warn!("No external PHY link, using PHY3 link fallback");
-        }
-
-        ext_link || cpu_link
+        self.with_smi(|bus|{
+            let phy1_link = bus.port1_status0().read().unwrap().read().link_good().bit_is_set();
+            let phy2_link = bus.port1_status0().read().unwrap().read().link_good().bit_is_set();
+            let phy3_link = bus.port1_status0().read().unwrap().read().link_good().bit_is_set();
+            phy1_link || phy2_link || phy3_link
+        })
     }
 
     fn diag_ports(&mut self) {
-        let port_phys = self.port_phys;
-        let n = self.port_phys_count;
         let mut link_bits = 0u8;
-        for phy_addr in port_phys[..n].iter().copied() {
+        for phy_addr in 1..=3 {
             let id1 = self.sm.smi_read(phy_addr, 0x02);
             let id2 = self.sm.smi_read(phy_addr, 0x03);
             let bsr_raw = self.sm.smi_read(phy_addr, 0x01); // status register
@@ -451,58 +371,20 @@ impl<SM: StationManagement> Ksz8863Phy<SM> {
 
 impl<SM: StationManagement> Phy for Ksz8863Phy<SM> {
     fn phy_reset(&mut self) {
-        self.scan_phys();
-
-        let port_phys = self.port_phys;
-        let n = self.port_phys_count;
-        self.with_miim(|bus| {
-            for phy_addr in port_phys[..n].iter().copied() {
-                let mut phy = bus.phy(phy_addr);
-                let _ = phy.bcr().write(|w| w.reset());
-            }
+        self.with_smi(|bus| {
+            bus.reset().modify(|m| m.software().set_bit());
         });
     }
 
     fn phy_init(&mut self) {
-        let port_phys = self.port_phys;
-        let n = self.port_phys_count;
-        self.with_miim(|bus| {
-            for phy_addr in port_phys[..n].iter().copied() {
-                let mut phy = bus.phy(phy_addr);
-
-                // Config link to STM
-                if phy_addr == 3 {
-                    let _ = phy.bcr().write(|w| {
-                        w.an_enable()
-                            .clear_bit() // Disable Auto-Link-Negotiation if setting speed manually
-                            .force_100()
-                            .set_bit()
-                            .force_fd()
-                            .set_bit()
-                            .power_down()
-                            .clear_bit()
-                            .disable_transmit()
-                            .clear_bit()
-                    });
-                    info!("Configured PHY {} as forced 100M/full-duplex", phy_addr);
-                // Config 2 external conns
-                } else {
-                    let _ = phy.bcr().modify(|w| {
-                        w.an_enable()
-                            .clear_bit()
-                            .restart_an()
-                            .set_bit()
-                            .force_100()
-                            .clear_bit() // 10BASE-T is more stable than 100BASE-T
-                            .power_down()
-                            .clear_bit()
-                            .disable_transmit()
-                            .clear_bit()
-                    });
-                    info!("Configured PHY {} for autoneg", phy_addr);
-                }
-            }
-        });
+        self.with_smi(|bus| {
+            bus.fwd_invalid_vid_frame_and_host_mode().write(|w| w.p3_rmii_clock_selection().set_bit()); // internally route refclk output to input (port 3 rmii)
+            // bus.pwr_mgmt_and_led_mode().write(|w| w.led_mode_selection().bits(0b01)); // Link / Act
+            bus.port1_ctrl12()
+                .write(|w| w.an_enable().set_bit().force_speed().set_bit());
+            bus.port2_ctrl12()
+                .write(|w| w.an_enable().set_bit().force_speed().set_bit());
+        })
     }
 
     fn poll_link(&mut self, cx: &mut Context) -> bool {
@@ -523,23 +405,30 @@ impl<SM: StationManagement> Phy for Ksz8863Phy<SM> {
     }
 }
 
-struct KszMiim<'a, SM: StationManagement> {
+struct KszSmi<'a, SM: StationManagement> {
     sm: &'a mut SM,
 }
 
-impl<SM: StationManagement> mdio::miim::Read for KszMiim<'_, SM> {
+impl<SM: StationManagement> mdio::Read for KszSmi<'_, SM> {
     type Error = Infallible;
 
-    fn read(&mut self, phy_addr: u8, reg_addr: u8) -> Result<u16, Self::Error> {
-        Ok(self.sm.smi_read(phy_addr, reg_addr))
+    fn read(&mut self, ctrl_bits: u16) -> Result<u16, Self::Error> {
+        Ok(self.sm.smi_read(
+            ((ctrl_bits >> 7) as u8) & 0b00011111,
+            ((ctrl_bits >> 2) as u8) & 0b00011111,
+        ))
     }
 }
 
-impl<SM: StationManagement> mdio::miim::Write for KszMiim<'_, SM> {
+impl<SM: StationManagement> mdio::Write for KszSmi<'_, SM> {
     type Error = Infallible;
 
-    fn write(&mut self, phy_addr: u8, reg_addr: u8, data: u16) -> Result<(), Self::Error> {
-        self.sm.smi_write(phy_addr, reg_addr, data);
+    fn write(&mut self, ctrl_bits: u16, data_bits: u16) -> Result<(), Self::Error> {
+        self.sm.smi_write(
+            ((ctrl_bits >> 7) as u8) & 0b00011111,
+            ((ctrl_bits >> 2) as u8) & 0b00011111,
+            data_bits,
+        );
         Ok(())
     }
 }
