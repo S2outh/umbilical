@@ -18,8 +18,9 @@ use embassy_stm32::bind_interrupts;
 use embassy_stm32::eth::{Ethernet, PacketQueue, Phy, Sma, StationManagement};
 use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_stm32::peripherals;
+use embassy_stm32::spi::{Config, Spi};
+use embassy_stm32::time::Hertz;
 use embassy_time::{Duration, Instant, Timer, with_timeout};
-use ksz8863::miim;
 use panic_probe as _;
 use static_cell::StaticCell;
 
@@ -27,7 +28,8 @@ bind_interrupts!(struct Irqs {
     ETH => embassy_stm32::eth::InterruptHandler;
 });
 
-type EthPhy = Ksz8863Phy<Sma<'static, peripherals::ETH_SMA>>;
+//type EthPhy = Ksz8863Phy<Sma<'static, peripherals::ETH_SMA>>;
+type EthPhy = Ksz8863PhySpi<'static>;
 type EthDriver = Ethernet<'static, peripherals::ETH, EthPhy>;
 
 static ETH_QUEUE: StaticCell<MaybeUninit<PacketQueue<8, 8>>> = StaticCell::new();
@@ -267,8 +269,16 @@ async fn main(spawner: Spawner) -> ! {
     PacketQueue::init(packet_queue);
     let packet_queue = unsafe { packet_queue.assume_init_mut() };
 
-    let sm = Sma::new(p.ETH_SMA, p.PA2, p.PC1);
-    let phy = Ksz8863Phy::new(sm, miim::DEFAULT_PHY_ADDRS);
+    //let sm = Sma::new(p.ETH_SMA, p.PA2, p.PC1);
+    //let phy = Ksz8863Phy::new(sm, miim::DEFAULT_PHY_ADDRS);
+
+    let mut spi_config = Config::default();
+    spi_config.frequency = Hertz(10_000_000); // KSZ SPI supports up to 25MHz
+    let spi = Spi::new_blocking(
+        p.SPI3, p.PC10, p.PC12, p.PC11, spi_config,
+    );
+    let cs = Output::new(p.PA15, Level::High, Speed::VeryHigh);
+    let phy = Ksz8863PhySpi::new(spi, cs);
 
     let mac_addr = [0x02, 0x00, 0x00, 0x88, 0x63, 0x01];
     let eth = Ethernet::new_with_phy(
@@ -309,6 +319,164 @@ async fn main(spawner: Spawner) -> ! {
     loop {
         let _ = &ksz_reset;
         Timer::after(Duration::from_secs(60)).await;
+    }
+}
+
+struct Ksz8863PhySpi<'a> {
+    spi: Spi<'a, embassy_stm32::mode::Blocking, embassy_stm32::spi::mode::Master>,
+    cs: Output<'static>,
+    poll_interval: Duration,
+    next_poll_at: Instant,
+    next_diag_at: Instant,
+    cached_link: bool,
+}
+
+impl<'a> Ksz8863PhySpi<'a> {
+    fn new(
+        spi: Spi<'a, embassy_stm32::mode::Blocking, embassy_stm32::spi::mode::Master>,
+        cs: Output<'static>,
+    ) -> Self {
+        Self {
+            spi,
+            cs,
+            poll_interval: Duration::from_millis(300),
+            next_poll_at: Instant::from_ticks(0),
+            next_diag_at: Instant::from_ticks(0),
+            cached_link: false,
+        }
+    }
+    fn reg_write(&mut self, reg: u8, value: u8) {
+        self.cs.set_low();
+        self.spi
+            .blocking_transfer_in_place(&mut [0x02, reg, value])
+            .unwrap();
+        self.cs.set_high();
+    }
+    fn reg_read(&mut self, reg: u8) -> u8 {
+        let mut buffer = [0u8; 3];
+        buffer[0] = 0x03; // Read Instruction
+        buffer[1] = reg; // Register Address
+        buffer[2] = 0x00; // Placeholder for shifted-out data
+
+        self.cs.set_low();
+        self.spi.blocking_transfer_in_place(&mut buffer).unwrap();
+        self.cs.set_high();
+
+        // Return register output
+        buffer[2]
+    }
+    fn set_p3_ref_clk(&mut self, internal: bool) {
+        let mut value = self.reg_read(0xC6);
+        value = (value & !(1 << 3)) | ((internal as u8) << 3);
+        self.reg_write(0xC6, value);
+    }
+    fn set_control(
+        &mut self,
+        port: u8,
+        auto_negotiate: bool,
+        force_speed_100: bool,
+        force_duplex: bool,
+    ) {
+        let reg = match port {
+            1 => 0x1C,
+            2 => 0x2C,
+            _ => core::panic!(),
+        };
+        let mut val = auto_negotiate as u8;
+        val = val << 1 + (force_speed_100 as u8);
+        val = val << 1 + (force_duplex as u8);
+        val = (val << 5) + (0b11111u8);
+        self.reg_write(reg, val);
+    }
+    fn get_auto_negotiate(&mut self, port: u8) -> bool {
+        let reg = match port {
+            1 => 0x1C,
+            2 => 0x2C,
+            _ => core::panic!(),
+        };
+        (self.reg_read(reg) >> 7) & 0b1 != 0
+    }
+    fn get_force_speed_100(&mut self, port: u8) -> bool {
+        let reg = match port {
+            1 => 0x1C,
+            2 => 0x2C,
+            _ => core::panic!(),
+        };
+        (self.reg_read(reg) >> 6) & 0b1 != 0
+    }
+    fn get_force_duplex(&mut self, port: u8) -> bool {
+        let reg = match port {
+            1 => 0x1C,
+            2 => 0x2C,
+            _ => core::panic!(),
+        };
+        (self.reg_read(reg) >> 5) & 0b1 != 0
+    }
+    fn get_link_good(&mut self, port: u8) -> bool {
+        let reg = match port {
+            1 => 0x1E,
+            2 => 0x2E,
+            _ => core::panic!(),
+        };
+        (self.reg_read(reg) >> 5) & 0b1 != 0
+    }
+    fn get_an_done(&mut self, port: u8) -> bool {
+        let reg = match port {
+            1 => 0x1E,
+            2 => 0x2E,
+            _ => core::panic!(),
+        };
+        (self.reg_read(reg) >> 6) & 0b1 != 0
+    }
+
+    fn any_port_link_up(&mut self) -> bool {
+        self.get_link_good(1) || self.get_link_good(2)
+    }
+
+    fn diag_ports(&mut self) {
+        let mut link_bits = 0u8;
+        for port in 1..2 {
+            let link = self.get_link_good(port);
+            let an_done = self.get_an_done(port);
+            info!(
+                "Port {} link={} an_done={}",
+                port, link, an_done,
+            );
+            link_bits |= 1 << (port - 1);
+        }
+
+        PHY_LINK_BITS.store(link_bits, Ordering::Relaxed);
+    }
+}
+
+impl Phy for Ksz8863PhySpi<'_> {
+    fn phy_reset(&mut self) {
+        // Reset the switch (Register 67: reset)
+        self.reg_write(0x43, 1 << 4);
+    }
+
+    fn phy_init(&mut self) {
+        self.phy_reset();
+        self.set_p3_ref_clk(true);
+        self.set_control(1, true, true, true);
+        self.set_control(2, true, true, true);
+    }
+
+    fn poll_link(&mut self, cx: &mut Context) -> bool {
+        let now = Instant::now();
+        if now >= self.next_diag_at {
+            self.diag_ports();
+            self.next_diag_at = now + Duration::from_secs(2);
+        }
+
+        if now < self.next_poll_at {
+            cx.waker().wake_by_ref();
+            return self.cached_link;
+        }
+
+        self.cached_link = self.any_port_link_up();
+        self.next_poll_at = now + self.poll_interval;
+        self.cached_link
     }
 }
 
