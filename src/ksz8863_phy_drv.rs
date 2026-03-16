@@ -65,8 +65,8 @@ impl<'a> Ksz8863Phy<'a> {
             _ => core::panic!(),
         };
         let mut val = auto_negotiate as u8;
-        val = val << 1 + (force_speed_100 as u8);
-        val = val << 1 + (force_duplex as u8);
+        val = (val << 1) + (force_speed_100 as u8);
+        val = (val << 1) + (force_duplex as u8);
         val = (val << 5) + (0b11111u8);
         self.reg_write(reg, val);
     }
@@ -120,9 +120,12 @@ impl<'a> Ksz8863Phy<'a> {
         for port in 1..2 {
             let link = self.get_link_good(port);
             let an_done = self.get_an_done(port);
+            let auto_negotiate = self.get_auto_negotiate(port);
+            let force_speed_100 = self.get_force_speed_100(port);
+            let force_duplex = self.get_force_duplex(port);
             info!(
-                "Port {} link={} an_done={}",
-                port, link, an_done,
+                "Port {} link={} an_done={} auto_negotiate={} force_speed_100={} force_duplex={}",
+                port, link, an_done, auto_negotiate, force_speed_100, force_duplex
             );
             link_bits |= (link as u8) << (port - 1);
         }
@@ -140,8 +143,8 @@ impl Phy for Ksz8863Phy<'_> {
     fn phy_init(&mut self) {
         self.phy_reset();
         self.set_p3_ref_clk(true);
-        self.set_control(1, false, true, true);
-        self.set_control(2, false, true, true);
+        self.set_control(1, true, true, true);
+        self.set_control(2, true, true, true);
     }
 
     fn poll_link(&mut self, cx: &mut Context) -> bool {
