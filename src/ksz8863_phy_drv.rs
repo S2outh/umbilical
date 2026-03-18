@@ -1,14 +1,13 @@
-use core::{sync::atomic::{AtomicU8, Ordering}, task::Context};
+use core::task::Context;
 
 use defmt::info;
 use embassy_stm32::{eth::Phy, gpio::Output, spi::Spi};
 use embassy_time::{Duration, Instant};
 
-pub static PHY_LINK_BITS: AtomicU8 = AtomicU8::new(0);
-
 pub struct Ksz8863Phy<'a> {
     spi: Spi<'a, embassy_stm32::mode::Blocking, embassy_stm32::spi::mode::Master>,
     cs: Output<'static>,
+    led_phy: [Output<'static>; 2],
     next_poll_at: Instant,
     next_diag_at: Instant,
     cached_link: bool,
@@ -18,10 +17,12 @@ impl<'a> Ksz8863Phy<'a> {
     pub fn new(
         spi: Spi<'a, embassy_stm32::mode::Blocking, embassy_stm32::spi::mode::Master>,
         cs: Output<'static>,
+        led_phy: [Output<'static>; 2],
     ) -> Self {
         Self {
             spi,
             cs,
+            led_phy,
             next_poll_at: Instant::from_ticks(0),
             next_diag_at: Instant::from_ticks(0),
             cached_link: false,
@@ -116,7 +117,6 @@ impl<'a> Ksz8863Phy<'a> {
     }
 
     fn diag_ports(&mut self) {
-        let mut link_bits = 0u8;
         for port in 1..2 {
             let link = self.get_link_good(port);
             let an_done = self.get_an_done(port);
@@ -127,10 +127,9 @@ impl<'a> Ksz8863Phy<'a> {
                 "Port {} link={} an_done={} auto_negotiate={} force_speed_100={} force_duplex={}",
                 port, link, an_done, auto_negotiate, force_speed_100, force_duplex
             );
-            link_bits |= (link as u8) << (port - 1);
-        }
 
-        PHY_LINK_BITS.store(link_bits, Ordering::Relaxed);
+            self.led_phy[port as usize].set_level(link.into());
+        }
     }
 }
 
