@@ -2,35 +2,42 @@
 #![no_main]
 
 mod ksz8863_phy_drv;
+mod io_threads;
+mod deserialize;
 
+use core::convert::Infallible;
 use core::net::SocketAddr;
 
+use alloc::vec::Vec;
 use defmt::*;
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_nats::UserPwdAuthenticator;
 use embassy_net::dns::DnsQueryType;
 use embassy_net::tcp::TcpSocket;
-use embassy_net::{
-    Runner, Stack, StackResources
-};
+use embassy_net::{Runner, Stack, StackResources};
+use embassy_stm32::can::{self, CanConfigurator, RxFdBuf, TxFdBuf};
+use embassy_stm32::rng::{self, Rng};
 use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_stm32::{Config, bind_interrupts};
 use embassy_stm32::eth::{Ethernet, PacketQueue};
 use embassy_stm32::rcc;
 use embassy_stm32::gpio::{Level, Output, Speed};
-use embassy_stm32::peripherals::{self, IWDG1};
+use embassy_stm32::peripherals::{self, FDCAN1, FDCAN2, IWDG1, RNG};
 use embassy_stm32::spi::{self, Spi};
 use embassy_stm32::time::mhz;
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
 use panic_probe as _;
+use south_common::chell::ground::Serializer;
+use south_common::configs::can_config::CanPeriphConfig;
+use south_common::definitions::{
+    telemetry as tm,
+};
 use static_cell::StaticCell;
 
 use crate::ksz8863_phy_drv::Ksz8863Phy;
-
-bind_interrupts!(struct Irqs {
-    ETH => embassy_stm32::eth::InterruptHandler;
-});
 
 type EthPhy = Ksz8863Phy<'static>;
 type EthDriver = Ethernet<'static, peripherals::ETH, EthPhy>;
@@ -38,6 +45,14 @@ type EthDriver = Ethernet<'static, peripherals::ETH, EthPhy>;
 // general setup stuff
 const WATCHDOG_TIMEOUT_US: u32 = 300_000;
 const WATCHDOG_PETTING_INTERVAL_US: u32 = WATCHDOG_TIMEOUT_US / 2;
+
+// Serialized value channel
+const MSG_CHANNEL_BUF_SIZE: usize = 30;
+
+type SerializedInfo = (&'static str, Vec<u8>);
+
+static MSG: StaticCell<Channel<ThreadModeRawMutex, SerializedInfo, MSG_CHANNEL_BUF_SIZE>> =
+    StaticCell::new();
 
 // Heap setup
 const HEAP_KB: usize = 64;
@@ -65,6 +80,25 @@ const MAC_ADDR: [u8; 6] = [0x10, 0x00, 0xDE, 0xAD, 0xBE, 0xEF];
 static NATS_STORAGE: StaticCell<embassy_nats::Storage> = StaticCell::new();
 const NATS_ADDR: &str = "nats.tichygames.de";
 
+// Static can buffer
+const C_RX_BUF_SIZE: usize = 512;
+const C_TX_BUF_SIZE: usize = 32;
+
+static C_RX_BUF: StaticCell<RxFdBuf<C_RX_BUF_SIZE>> = StaticCell::new();
+static C_TX_BUF: StaticCell<TxFdBuf<C_TX_BUF_SIZE>> = StaticCell::new();
+
+bind_interrupts!(struct Irqs {
+    ETH => embassy_stm32::eth::InterruptHandler;
+    RNG => rng::InterruptHandler<RNG>;
+
+    FDCAN1_IT0 => can::IT0InterruptHandler<FDCAN1>;
+    FDCAN1_IT1 => can::IT1InterruptHandler<FDCAN1>;
+
+    FDCAN2_IT0 => can::IT0InterruptHandler<FDCAN2>;
+    FDCAN2_IT1 => can::IT1InterruptHandler<FDCAN2>;
+});
+
+
 fn get_rcc_config() -> rcc::Config {
     let mut rcc_config = rcc::Config::default();
     rcc_config.hsi = Some(rcc::HSIPrescaler::DIV1); // 64 MHz
@@ -89,6 +123,15 @@ fn get_rcc_config() -> rcc::Config {
     rcc_config.apb4_pre = rcc::APBPrescaler::DIV2;
 
     rcc_config
+}
+
+struct CborSerializer;
+impl Serializer for CborSerializer {
+    type Error = minicbor_serde::error::EncodeError<Infallible>;
+    fn serialize_value<T: serde::Serialize>(&self, value: &T)
+        -> Result<alloc::vec::Vec<u8>, Self::Error> {
+        minicbor_serde::to_vec(value)
+    }
 }
 
 /// Watchdog petting task
@@ -174,12 +217,18 @@ async fn main(spawner: Spawner) {
     );
 
     let net_cfg = embassy_net::Config::dhcpv4(Default::default());
-    let net_seed = 0x00C0_FFEE_u64;
+
+    // Generate random seed.
+    let mut rng = Rng::new(p.RNG, Irqs);
+    let mut seed = [0; 8];
+    rng.fill_bytes(&mut seed);
+    let seed = u64::from_le_bytes(seed);
+
     let (stack, runner) = embassy_net::new(
         eth,
         net_cfg,
         RESOURCES.init(StackResources::new()),
-        net_seed,
+        seed,
     );
     spawner.must_spawn(net_task(runner));
 
@@ -209,8 +258,34 @@ async fn main(spawner: Spawner) {
 
     // nats connection
     let (client, runner) = embassy_nats::new_with_user_pwd("nats", "nats", socket_addr, socket, nats_storage);
-
+    
     spawner.must_spawn(nats_task(runner));
+
+    // can 1 configuration
+    let mut can_configurator =
+        CanPeriphConfig::new(CanConfigurator::new(p.FDCAN2, p.PB5, p.PB6, Irqs));
+
+    // can 2 configuration
+    // let mut can_configurator =
+    //     CanPeriphConfig::new(CanConfigurator::new(p.FDCAN1, p.PD0, p.PD1, Irqs));
+
+    can_configurator
+        .add_receive_topic_range(tm::id_range())
+        .unwrap();
+
+    let can_instance = can_configurator.activate(
+        C_TX_BUF.init(TxFdBuf::<C_TX_BUF_SIZE>::new()),
+        C_RX_BUF.init(RxFdBuf::<C_RX_BUF_SIZE>::new()),
+    );
+
+    // set can standby pin to low
+    let _can_1_standby = Output::new(p.PB7, Level::Low, Speed::Low);
+    // let _can_2_standby = Output::new(p.PD7, Level::Low, Speed::Low);
+    
+    let channel = MSG.init(Channel::new());
+
+    spawner.must_spawn(io_threads::can_receiver_task(can_instance.reader(), channel.sender()));
+    spawner.must_spawn(io_threads::sender_task(client, channel.dyn_receiver()));
 
     core::future::pending::<()>().await;
 }
