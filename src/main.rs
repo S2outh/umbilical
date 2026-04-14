@@ -230,10 +230,10 @@ async fn main(spawner: Spawner) {
         RESOURCES.init(StackResources::new()),
         seed,
     );
-    spawner.must_spawn(net_task(runner));
+    spawner.spawn(net_task(runner).unwrap());
 
     // Launch watchdog task
-    spawner.must_spawn(petter(watchdog));
+    spawner.spawn(petter(watchdog).unwrap());
 
     // wait for eth connection
     stack.wait_config_up().await;
@@ -259,15 +259,15 @@ async fn main(spawner: Spawner) {
     // nats connection
     let (client, runner) = embassy_nats::new_with_user_pwd("nats", "nats", socket_addr, socket, nats_storage);
     
-    spawner.must_spawn(nats_task(runner));
+    spawner.spawn(nats_task(runner).unwrap());
 
     // can 1 configuration
     let mut can_configurator =
-        CanPeriphConfig::new(CanConfigurator::new(p.FDCAN2, p.PB5, p.PB6, Irqs));
+        CanPeriphConfig::new(CanConfigurator::new(p.FDCAN1, p.PD0, p.PD1, Irqs));
 
     // can 2 configuration
     // let mut can_configurator =
-    //     CanPeriphConfig::new(CanConfigurator::new(p.FDCAN1, p.PD0, p.PD1, Irqs));
+    //     CanPeriphConfig::new(CanConfigurator::new(p.FDCAN2, p.PB5, p.PB6, Irqs));
 
     can_configurator
         .add_receive_topic_range(tm::id_range())
@@ -279,13 +279,13 @@ async fn main(spawner: Spawner) {
     );
 
     // set can standby pin to low
-    let _can_1_standby = Output::new(p.PB7, Level::Low, Speed::Low);
-    // let _can_2_standby = Output::new(p.PD7, Level::Low, Speed::Low);
+    let _can_1_standby = Output::new(p.PE2, Level::Low, Speed::Low);
+    // let _can_2_standby = Output::new(p.PE3, Level::Low, Speed::Low);
     
     let channel = MSG.init(Channel::new());
 
-    spawner.must_spawn(io_threads::can_receiver_task(can_instance.reader(), channel.sender()));
-    spawner.must_spawn(io_threads::sender_task(client, channel.dyn_receiver()));
+    spawner.spawn(io_threads::can_receiver_task(can_instance.reader(), channel.sender()).unwrap());
+    spawner.spawn(io_threads::sender_task(client, channel.dyn_receiver()).unwrap());
 
     core::future::pending::<()>().await;
 }

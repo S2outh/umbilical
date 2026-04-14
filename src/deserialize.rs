@@ -57,6 +57,13 @@ reserializers!(u64, CborSerializer,
     tm::upper_sensor::Baro,
     tm::upper_sensor::InternalTemperature,
 
+    tm::pyro::Status,
+    tm::pyro::InternalTemperature,
+    tm::pyro::Bat1Voltage,
+    tm::pyro::Bat2Voltage,
+    tm::pyro::Out1Voltage,
+    tm::pyro::Out2Voltage,
+
     tm::lower_sensor::Adc
 );
 
