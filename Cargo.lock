@@ -372,7 +372,7 @@ dependencies = [
 [[package]]
 name = "embassy-nats"
 version = "0.1.0"
-source = "git+https://github.com/S2outh/embassy-nats.git#c55d7f6770cdbb0a0f35aa8b80aa4c9b7e3e8b5e"
+source = "git+https://github.com/S2outh/embassy-nats.git#25570c83165e2b55c17128ff3640d93813270b18"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",

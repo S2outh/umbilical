@@ -1,12 +1,12 @@
 use alloc::string::String;
 use defmt::error;
-use embassy_stm32::can::BufferedFdCanReceiver;
+use embassy_stm32::can::{BufferedFdCanReceiver, BufferedFdCanSender, frame::FdFrame};
 use embassy_sync::{
     blocking_mutex::raw::ThreadModeRawMutex,
     channel::{DynamicReceiver, Sender},
 };
 use embassy_time::Instant;
-use south_common::definitions::telemetry;
+use south_common::{chell::ChellDefinition, definitions::{internal_msgs, telemetry}};
 
 use crate::{MSG_CHANNEL_BUF_SIZE, SerializedInfo, cbor_serializer};
 
@@ -39,9 +39,19 @@ pub async fn can_receiver_task(
     }
 }
 
-/// send messages via nats
 #[embassy_executor::task]
-pub async fn sender_task(
+pub async fn telecommand_task(
+    mut can: BufferedFdCanSender,
+    mut nats_client: embassy_nats::Client<'static>
+) {
+    let nats_msg = nats_client.receive().await;
+    let frame = FdFrame::new_standard(internal_msgs::Telecommand.id(), &nats_msg.data).unwrap();
+    can.write(frame).await;
+}
+
+/// send tm via nats
+#[embassy_executor::task]
+pub async fn nats_sender_task(
     mut nats_client: embassy_nats::Client<'static>,
     receiver: DynamicReceiver<'static, SerializedInfo>,
 ) {

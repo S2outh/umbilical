@@ -28,8 +28,9 @@ use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
 use panic_probe as _;
+use south_common::chell::ChellDefinition;
 use south_common::configs::can_config::CanPeriphConfig;
-use south_common::definitions::telemetry as tm;
+use south_common::definitions::{internal_msgs, telemetry as tm};
 use static_cell::StaticCell;
 
 use crate::ksz8863_phy_drv::Ksz8863Phy;
@@ -68,12 +69,12 @@ static TCP_RX_BUF: StaticCell<[u8; TCP_RX_BUF_SIZE]> = StaticCell::new();
 const TCP_TX_BUF_SIZE: usize = 1024;
 static TCP_TX_BUF: StaticCell<[u8; TCP_TX_BUF_SIZE]> = StaticCell::new();
 
-// mac address. hardcoded for now
-const MAC_ADDR: [u8; 6] = [0x10, 0x00, 0xDE, 0xAD, 0xBE, 0xEF];
-
 // NATS
 static NATS_STORAGE: StaticCell<embassy_nats::Storage> = StaticCell::new();
 const NATS_ADDR: &str = "nats.tichygames.de";
+
+static TC_CH: StaticCell<embassy_nats::MsgChannel> =
+    StaticCell::new();
 
 // Static can buffer
 const C_RX_BUF_SIZE: usize = 512;
@@ -193,6 +194,17 @@ async fn main(spawner: Spawner) {
     let cs = Output::new(p.PA15, Level::High, Speed::VeryHigh);
     let phy = Ksz8863Phy::new(spi, cs, [led_phy1, led_phy2]);
 
+    // Generate random seed and mac.
+    let mut rng = Rng::new(p.RNG, Irqs);
+
+    let mut seed = [0; 8];
+    rng.fill_bytes(&mut seed);
+    let seed = u64::from_le_bytes(seed);
+
+    let mut mac_addr = [0; 6];
+    rng.fill_bytes(&mut mac_addr);
+
+    // Ethernet device setup
     let eth = Ethernet::new_with_phy(
         PACKET_QUEUE.init(PacketQueue::new()),
         p.ETH,
@@ -204,17 +216,11 @@ async fn main(spawner: Spawner) {
         p.PB12,
         p.PB13,
         p.PB11,
-        MAC_ADDR,
+        mac_addr,
         phy,
     );
 
     let net_cfg = embassy_net::Config::dhcpv4(Default::default());
-
-    // Generate random seed.
-    let mut rng = Rng::new(p.RNG, Irqs);
-    let mut seed = [0; 8];
-    rng.fill_bytes(&mut seed);
-    let seed = u64::from_le_bytes(seed);
 
     let (stack, runner) =
         embassy_net::new(eth, net_cfg, RESOURCES.init(StackResources::new()), seed);
@@ -248,6 +254,13 @@ async fn main(spawner: Spawner) {
     let (client, runner) =
         embassy_nats::new_with_user_pwd("nats", "nats", socket_addr, socket, nats_storage);
 
+    // nats tc subscription
+    let mut tc_client = client.clone();
+    tc_client.subscribe(
+        alloc::string::String::from(internal_msgs::Telecommand.address()),
+        TC_CH.init(embassy_nats::MsgChannel::new())
+    ).await;
+
     spawner.spawn(nats_task(runner).unwrap());
 
     // can 1 configuration
@@ -274,7 +287,8 @@ async fn main(spawner: Spawner) {
     let channel = MSG.init(Channel::new());
 
     spawner.spawn(io_threads::can_receiver_task(can_instance.reader(), channel.sender()).unwrap());
-    spawner.spawn(io_threads::sender_task(client, channel.dyn_receiver()).unwrap());
+    spawner.spawn(io_threads::nats_sender_task(client, channel.dyn_receiver()).unwrap());
+    spawner.spawn(io_threads::telecommand_task(can_instance.writer(), tc_client).unwrap());
 
     core::future::pending::<()>().await;
 }
