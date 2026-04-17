@@ -1374,6 +1374,7 @@ dependencies = [
  "embassy-time",
  "embedded-can",
  "embedded-io-async 0.7.0",
+ "erased-serde",
  "ksz8863",
  "mdio",
  "minicbor-serde",

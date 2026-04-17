@@ -1,11 +1,9 @@
 #![no_std]
 #![no_main]
 
-mod ksz8863_phy_drv;
 mod io_threads;
-mod deserialize;
+mod ksz8863_phy_drv;
 
-use core::convert::Infallible;
 use core::net::SocketAddr;
 
 use alloc::vec::Vec;
@@ -17,24 +15,21 @@ use embassy_net::dns::DnsQueryType;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{Runner, Stack, StackResources};
 use embassy_stm32::can::{self, CanConfigurator, RxFdBuf, TxFdBuf};
-use embassy_stm32::rng::{self, Rng};
-use embassy_stm32::wdg::IndependentWatchdog;
-use embassy_stm32::{Config, bind_interrupts};
 use embassy_stm32::eth::{Ethernet, PacketQueue};
-use embassy_stm32::rcc;
 use embassy_stm32::gpio::{Level, Output, Speed};
 use embassy_stm32::peripherals::{self, FDCAN1, FDCAN2, IWDG1, RNG};
+use embassy_stm32::rcc;
+use embassy_stm32::rng::{self, Rng};
 use embassy_stm32::spi::{self, Spi};
 use embassy_stm32::time::mhz;
+use embassy_stm32::wdg::IndependentWatchdog;
+use embassy_stm32::{Config, bind_interrupts};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
 use embassy_sync::channel::Channel;
 use embassy_time::{Duration, Timer};
 use panic_probe as _;
-use south_common::chell::ground::Serializer;
 use south_common::configs::can_config::CanPeriphConfig;
-use south_common::definitions::{
-    telemetry as tm,
-};
+use south_common::definitions::telemetry as tm;
 use static_cell::StaticCell;
 
 use crate::ksz8863_phy_drv::Ksz8863Phy;
@@ -58,7 +53,7 @@ static MSG: StaticCell<Channel<ThreadModeRawMutex, SerializedInfo, MSG_CHANNEL_B
 const HEAP_KB: usize = 64;
 
 #[global_allocator]
-static ALLOCATOR: emballoc::Allocator<{HEAP_KB * 1024}> = emballoc::Allocator::new();
+static ALLOCATOR: emballoc::Allocator<{ HEAP_KB * 1024 }> = emballoc::Allocator::new();
 extern crate alloc;
 
 // queues for raw packets before and after processing
@@ -98,7 +93,6 @@ bind_interrupts!(struct Irqs {
     FDCAN2_IT1 => can::IT1InterruptHandler<FDCAN2>;
 });
 
-
 fn get_rcc_config() -> rcc::Config {
     let mut rcc_config = rcc::Config::default();
     rcc_config.hsi = Some(rcc::HSIPrescaler::DIV1); // 64 MHz
@@ -107,11 +101,11 @@ fn get_rcc_config() -> rcc::Config {
     // pll to multiply clock cycles
     rcc_config.pll1 = Some(rcc::Pll {
         source: rcc::PllSource::HSI,
-        prediv: rcc::PllPreDiv::DIV8,   // 8 MHz
-        mul: rcc::PllMul::MUL40,        // 320 MHz
-        divp: Some(rcc::PllDiv::DIV2),  // 160 MHz
-        divq: Some(rcc::PllDiv::DIV2),  // 160 MHz
-        divr: Some(rcc::PllDiv::DIV5),  // 64 MHz
+        prediv: rcc::PllPreDiv::DIV8,  // 8 MHz
+        mul: rcc::PllMul::MUL40,       // 320 MHz
+        divp: Some(rcc::PllDiv::DIV2), // 160 MHz
+        divq: Some(rcc::PllDiv::DIV2), // 160 MHz
+        divr: Some(rcc::PllDiv::DIV5), // 64 MHz
     });
     rcc_config.sys = rcc::Sysclk::PLL1_P; // cpu runs with 160 MHz
     rcc_config.mux.fdcansel = rcc::mux::Fdcansel::PLL1_Q; // can runs with 160 MHz
@@ -125,13 +119,13 @@ fn get_rcc_config() -> rcc::Config {
     rcc_config
 }
 
-struct CborSerializer;
-impl Serializer for CborSerializer {
-    type Error = minicbor_serde::error::EncodeError<Infallible>;
-    fn serialize_value<T: serde::Serialize>(&self, value: &T)
-        -> Result<alloc::vec::Vec<u8>, Self::Error> {
-        minicbor_serde::to_vec(value)
-    }
+fn cbor_serializer(
+    value: &dyn erased_serde::Serialize,
+) -> Result<alloc::vec::Vec<u8>, erased_serde::Error> {
+    let mut buffer = alloc::vec::Vec::new();
+    let mut serializer = minicbor_serde::Serializer::new(&mut buffer);
+    value.erased_serialize(&mut <dyn erased_serde::Serializer>::erase(&mut serializer))?;
+    Ok(buffer)
 }
 
 /// Watchdog petting task
@@ -154,18 +148,18 @@ async fn nats_task(mut runner: embassy_nats::Runner<'static, UserPwdAuthenticato
 }
 
 pub async fn parse_or_resolve(
-       stack: &Stack<'_>,
-       s: &str,
-   ) -> Result<SocketAddr, embassy_net::dns::Error> {
-   if let Ok(sa) = s.parse::<SocketAddr>() {
-       return Ok(sa);
-   }
+    stack: &Stack<'_>,
+    s: &str,
+) -> Result<SocketAddr, embassy_net::dns::Error> {
+    if let Ok(sa) = s.parse::<SocketAddr>() {
+        return Ok(sa);
+    }
 
-   let ips = stack.dns_query(s, DnsQueryType::A).await?;
-   let Some(ip) = ips.first() else {
-       return Err(embassy_net::dns::Error::Failed);
-   };
-   Ok(SocketAddr::new((*ip).into(), 4222))
+    let ips = stack.dns_query(s, DnsQueryType::A).await?;
+    let Some(ip) = ips.first() else {
+        return Err(embassy_net::dns::Error::Failed);
+    };
+    Ok(SocketAddr::new((*ip).into(), 4222))
 }
 
 #[embassy_executor::main]
@@ -195,9 +189,7 @@ async fn main(spawner: Spawner) {
 
     let mut spi_config = spi::Config::default();
     spi_config.frequency = mhz(10); // KSZ SPI supports up to 25MHz
-    let spi = Spi::new_blocking(
-        p.SPI3, p.PC10, p.PC12, p.PC11, spi_config,
-    );
+    let spi = Spi::new_blocking(p.SPI3, p.PC10, p.PC12, p.PC11, spi_config);
     let cs = Output::new(p.PA15, Level::High, Speed::VeryHigh);
     let phy = Ksz8863Phy::new(spi, cs, [led_phy1, led_phy2]);
 
@@ -224,12 +216,8 @@ async fn main(spawner: Spawner) {
     rng.fill_bytes(&mut seed);
     let seed = u64::from_le_bytes(seed);
 
-    let (stack, runner) = embassy_net::new(
-        eth,
-        net_cfg,
-        RESOURCES.init(StackResources::new()),
-        seed,
-    );
+    let (stack, runner) =
+        embassy_net::new(eth, net_cfg, RESOURCES.init(StackResources::new()), seed);
     spawner.spawn(net_task(runner).unwrap());
 
     // Launch watchdog task
@@ -257,8 +245,9 @@ async fn main(spawner: Spawner) {
     let nats_storage = NATS_STORAGE.init(embassy_nats::Storage::new());
 
     // nats connection
-    let (client, runner) = embassy_nats::new_with_user_pwd("nats", "nats", socket_addr, socket, nats_storage);
-    
+    let (client, runner) =
+        embassy_nats::new_with_user_pwd("nats", "nats", socket_addr, socket, nats_storage);
+
     spawner.spawn(nats_task(runner).unwrap());
 
     // can 1 configuration
@@ -281,7 +270,7 @@ async fn main(spawner: Spawner) {
     // set can standby pin to low
     let _can_1_standby = Output::new(p.PE2, Level::Low, Speed::Low);
     // let _can_2_standby = Output::new(p.PE3, Level::Low, Speed::Low);
-    
+
     let channel = MSG.init(Channel::new());
 
     spawner.spawn(io_threads::can_receiver_task(can_instance.reader(), channel.sender()).unwrap());
@@ -289,4 +278,3 @@ async fn main(spawner: Spawner) {
 
     core::future::pending::<()>().await;
 }
-
