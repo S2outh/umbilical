@@ -44,9 +44,12 @@ pub async fn telecommand_task(
     mut can: BufferedFdCanSender,
     mut nats_client: embassy_nats::Client<'static>
 ) {
-    let nats_msg = nats_client.receive().await;
-    let frame = FdFrame::new_standard(internal_msgs::Telecommand.id(), &nats_msg.data).unwrap();
-    can.write(frame).await;
+    loop {
+        let nats_msg = nats_client.receive().await;
+        defmt::info!("Cmd: {}", nats_msg.data);
+        let frame = FdFrame::new_standard(internal_msgs::Telecommand.id(), &nats_msg.data).unwrap();
+        can.write(frame).await;
+    }
 }
 
 /// send tm via nats

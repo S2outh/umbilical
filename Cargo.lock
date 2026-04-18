@@ -372,7 +372,7 @@ dependencies = [
 [[package]]
 name = "embassy-nats"
 version = "0.1.0"
-source = "git+https://github.com/S2outh/embassy-nats.git#25570c83165e2b55c17128ff3640d93813270b18"
+source = "git+https://github.com/S2outh/embassy-nats.git#51599eea606d89348a25871301a3e1a25f81864e"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",
@@ -818,7 +818,7 @@ dependencies = [
 [[package]]
 name = "lsm6dsv32"
 version = "0.1.0"
-source = "git+ssh://git@github.com/S2outh/imu-driver.git#c7d6a65f1e1db4d82003c167eeb5f0e1e5f60596"
+source = "git+https://github.com/S2outh/imu-driver.git#c7d6a65f1e1db4d82003c167eeb5f0e1e5f60596"
 
 [[package]]
 name = "managed"
@@ -1014,7 +1014,7 @@ checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
 [[package]]
 name = "rm3100"
 version = "0.1.0"
-source = "git+ssh://git@github.com/S2outh/magneto-driver.git#d3a7e28c94ce7b93f88c7954a0afa515ac6a7fde"
+source = "git+https://github.com/S2outh/magneto-driver.git#d3a7e28c94ce7b93f88c7954a0afa515ac6a7fde"
 dependencies = [
  "defmt 1.0.1",
 ]
@@ -1142,7 +1142,7 @@ dependencies = [
 [[package]]
 name = "south-common"
 version = "4.0.0"
-source = "git+https://github.com/S2outh/south-common.git#2fbab51b40e29b1a330b801d1a5ef30c8e16cf1d"
+source = "git+https://github.com/S2outh/south-common.git#a614cbfeb989f506a83f8ca3f0ced42676c6397e"
 dependencies = [
  "bitflags 2.11.1",
  "chell",
