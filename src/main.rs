@@ -77,7 +77,7 @@ static TC_CH: StaticCell<embassy_nats::MsgChannel> =
     StaticCell::new();
 
 // Static can buffer
-const C_RX_BUF_SIZE: usize = 512;
+const C_RX_BUF_SIZE: usize = 1024;
 const C_TX_BUF_SIZE: usize = 32;
 
 static C_RX_BUF: StaticCell<RxFdBuf<C_RX_BUF_SIZE>> = StaticCell::new();
@@ -104,18 +104,19 @@ fn get_rcc_config() -> rcc::Config {
         source: rcc::PllSource::HSI,
         prediv: rcc::PllPreDiv::DIV8,  // 8 MHz
         mul: rcc::PllMul::MUL40,       // 320 MHz
-        divp: Some(rcc::PllDiv::DIV2), // 160 MHz
-        divq: Some(rcc::PllDiv::DIV2), // 160 MHz
+        divp: Some(rcc::PllDiv::DIV1), // 320 MHz
+        divq: Some(rcc::PllDiv::DIV1), // 320 MHz
         divr: Some(rcc::PllDiv::DIV5), // 64 MHz
     });
-    rcc_config.sys = rcc::Sysclk::PLL1_P; // cpu runs with 160 MHz
-    rcc_config.mux.fdcansel = rcc::mux::Fdcansel::PLL1_Q; // can runs with 160 MHz
+    rcc_config.sys = rcc::Sysclk::PLL1_P; // cpu runs with 320 MHz
+    rcc_config.mux.fdcansel = rcc::mux::Fdcansel::PLL1_Q; // can runs with 320 MHz
     rcc_config.voltage_scale = rcc::VoltageScale::Scale1; // voltage scale for max 225 MHz
 
-    rcc_config.apb1_pre = rcc::APBPrescaler::DIV2; // APB 1-4 all run with 80 MHz due to hardware limits
-    rcc_config.apb2_pre = rcc::APBPrescaler::DIV2;
-    rcc_config.apb3_pre = rcc::APBPrescaler::DIV2;
-    rcc_config.apb4_pre = rcc::APBPrescaler::DIV2;
+    rcc_config.ahb_pre = rcc::AHBPrescaler::DIV2;  // AHB runs at 160 MHz due to hardware limits
+    rcc_config.apb1_pre = rcc::APBPrescaler::DIV4; // APB 1-4 all run with 80 MHz due to hardware limits
+    rcc_config.apb2_pre = rcc::APBPrescaler::DIV4;
+    rcc_config.apb3_pre = rcc::APBPrescaler::DIV4;
+    rcc_config.apb4_pre = rcc::APBPrescaler::DIV4;
 
     rcc_config
 }
