@@ -116,8 +116,8 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "chell"
-version = "6.0.1"
-source = "git+https://github.com/S2outh/chell-sys.git#eca47997c5400859ab051d9237a418b04b9bed60"
+version = "6.0.2"
+source = "git+https://github.com/S2outh/chell-sys.git#66b3c8eeb5398b62bac5fe21ae67a8bc36209e1e"
 dependencies = [
  "chell-macros",
  "erased-serde",
@@ -126,8 +126,8 @@ dependencies = [
 
 [[package]]
 name = "chell-macros"
-version = "6.0.1"
-source = "git+https://github.com/S2outh/chell-sys.git#eca47997c5400859ab051d9237a418b04b9bed60"
+version = "6.0.2"
+source = "git+https://github.com/S2outh/chell-sys.git#66b3c8eeb5398b62bac5fe21ae67a8bc36209e1e"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -372,7 +372,7 @@ dependencies = [
 [[package]]
 name = "embassy-nats"
 version = "0.1.0"
-source = "git+https://github.com/S2outh/embassy-nats.git#51599eea606d89348a25871301a3e1a25f81864e"
+source = "git+https://github.com/S2outh/embassy-nats.git#79d148dcb613d3302ee67ccde6e80e6154e38be0"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",
@@ -1142,7 +1142,7 @@ dependencies = [
 [[package]]
 name = "south-common"
 version = "4.0.0"
-source = "git+https://github.com/S2outh/south-common.git#a614cbfeb989f506a83f8ca3f0ced42676c6397e"
+source = "git+https://github.com/S2outh/south-common.git#3dd17fc2e74d542a0fecba40027b72622b1f662a"
 dependencies = [
  "bitflags 2.11.1",
  "chell",
