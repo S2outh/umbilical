@@ -5,15 +5,15 @@ use embassy_sync::{
     blocking_mutex::raw::ThreadModeRawMutex,
     channel::{DynamicReceiver, Sender},
 };
-use embassy_time::Instant;
 use south_common::{chell::ChellDefinition, definitions::{internal_msgs, telemetry}};
 
-use crate::{MSG_CHANNEL_BUF_SIZE, SerializedInfo, cbor_serializer};
+use crate::{MSG_CHANNEL_BUF_SIZE, SerializedInfo, cbor_serializer, timesync::current_unix_time_micros};
 
 /// receive can messages and put them in the corresponding beacons
 #[embassy_executor::task]
 pub async fn can_receiver_task(
     can: BufferedFdCanReceiver,
+    unix_time_offset_us: i64,
     sender: Sender<'static, ThreadModeRawMutex, SerializedInfo, MSG_CHANNEL_BUF_SIZE>,
 ) {
     loop {
@@ -21,9 +21,10 @@ pub async fn can_receiver_task(
         match can.receive().await {
             Ok(envelope) => {
                 if let embedded_can::Id::Standard(id) = envelope.frame.id() {
-                    if let Ok(values) = telemetry::from_id(id.as_raw()).unwrap().reserialize(
+                    let Ok(def) = telemetry::from_id(id.as_raw()) else { continue; };
+                    if let Ok(values) = def.reserialize(
                         &envelope.frame.data(),
-                        &Instant::now().as_micros(),
+                        &current_unix_time_micros(unix_time_offset_us),
                         &cbor_serializer,
                     ) {
                         for serialized_value in values {

@@ -2,6 +2,7 @@
 #![no_main]
 
 mod io_threads;
+mod timesync;
 mod ksz8863_phy_drv;
 
 use core::net::SocketAddr;
@@ -237,6 +238,9 @@ async fn main(spawner: Spawner) {
 
     info!("Network initialized");
 
+    // get unix time over ntp
+    let unix_time_offset_us = timesync::sync_internet_time(&stack).await;
+
     // Initizlize Nats socket
     let socket = TcpSocket::new(stack, TCP_RX_BUF.init([0; _]), TCP_TX_BUF.init([0; _]));
 
@@ -289,7 +293,7 @@ async fn main(spawner: Spawner) {
 
     let channel = MSG.init(Channel::new());
 
-    spawner.spawn(io_threads::can_receiver_task(can_instance.reader(), channel.sender()).unwrap());
+    spawner.spawn(io_threads::can_receiver_task(can_instance.reader(), unix_time_offset_us, channel.sender()).unwrap());
     spawner.spawn(io_threads::nats_sender_task(client, channel.dyn_receiver()).unwrap());
     spawner.spawn(io_threads::telecommand_task(can_instance.writer(), tc_client).unwrap());
 
