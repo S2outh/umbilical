@@ -8,16 +8,6 @@ const NTP_ADDR: &str = "pool.ntp.org";
 const NTP_PORT: u16 = 123;
 const NTP_UNIX_EPOCH_DIFF_SECS: u64 = 2_208_988_800;
 
-pub fn current_unix_time_micros(offset: i64) -> u64 {
-    let now = Instant::now().as_micros();
-
-    if offset >= 0 {
-        now.saturating_add(offset as u64)
-    } else {
-        now.saturating_sub((-offset) as u64)
-    }
-}
-
 fn ntp_packet_to_unix_micros(packet: &[u8]) -> Option<u64> {
     if packet.len() < 48 {
         return None;
@@ -34,7 +24,7 @@ fn ntp_packet_to_unix_micros(packet: &[u8]) -> Option<u64> {
     Some(unix_secs.saturating_mul(1_000_000).saturating_add(micros_from_frac))
 }
 
-async fn try_sync_internet_time(stack: &Stack<'_>) -> Result<i64, &'static str> {
+async fn try_sync_internet_time(stack: &Stack<'_>) -> Result<u64, &'static str> {
     let ips = stack
         .dns_query(NTP_ADDR, DnsQueryType::A)
         .await
@@ -69,16 +59,15 @@ async fn try_sync_internet_time(stack: &Stack<'_>) -> Result<i64, &'static str> 
     };
 
     unix_us = unix_us.saturating_add((t1 - t0) / 2);
-    let offset = unix_us as i64 - t1 as i64;
-    Ok(offset)
+    Ok(unix_us)
 }
 
-pub async fn sync_internet_time(stack: &Stack<'_>) -> i64 {
+pub async fn sync_internet_time(stack: &Stack<'_>) -> u64 {
     for attempt in 1..=10 {
         match try_sync_internet_time(stack).await {
-            Ok(offset) => {
+            Ok(unix_us) => {
                 info!("internet time synced on attempt {}", attempt);
-                return offset;
+                return unix_us;
             }
             Err(e) => {
                 warn!("internet time sync failed ({}): {}", attempt, e);

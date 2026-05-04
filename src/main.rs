@@ -8,7 +8,7 @@ mod ksz8863_phy_drv;
 use core::net::SocketAddr;
 
 use alloc::vec::Vec;
-use defmt::*;
+use defmt::{info, warn};
 use defmt_rtt as _;
 use embassy_executor::Spawner;
 use embassy_nats::UserPwdAuthenticator;
@@ -26,14 +26,16 @@ use embassy_stm32::time::mhz;
 use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_stm32::{Config, bind_interrupts};
 use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
-use embassy_sync::channel::Channel;
+use embassy_sync::channel::{Channel, Receiver, Sender};
 use embassy_time::{Duration, Timer};
 use panic_probe as _;
 use south_common::chell::ChellDefinition;
 use south_common::configs::can_config::CanPeriphConfig;
 use south_common::definitions::{internal_msgs, telemetry as tm};
+use south_common::gen_obdh_types;
 use static_cell::StaticCell;
 
+use crate::io_threads::Reserialize;
 use crate::ksz8863_phy_drv::Ksz8863Phy;
 
 type EthPhy = Ksz8863Phy<'static>;
@@ -43,12 +45,25 @@ type EthDriver = Ethernet<'static, peripherals::ETH, EthPhy>;
 const WATCHDOG_TIMEOUT_US: u32 = 300_000;
 const WATCHDOG_PETTING_INTERVAL_US: u32 = WATCHDOG_TIMEOUT_US / 2;
 
+const NTP_TIME_SRC_UPDATE_PRIO: u8 = 10;
+
+// Obdh types
+gen_obdh_types!(Umbilical, internal_msgs::Telecommand, on_tm => io_threads::Reserialize);
+
+// internal messaging channels
+static COM_CHANNELS: UmbilicalComChannels =
+    UmbilicalComChannels::new(2);
+
 // Serialized value channel
 const MSG_CHANNEL_BUF_SIZE: usize = 30;
 
 type SerializedInfo = (&'static str, Vec<u8>);
 
-static MSG: StaticCell<Channel<ThreadModeRawMutex, SerializedInfo, MSG_CHANNEL_BUF_SIZE>> =
+type InternalNatsChannel = Channel<ThreadModeRawMutex, SerializedInfo, MSG_CHANNEL_BUF_SIZE>;
+type InternalNatsSender = Sender<'static, ThreadModeRawMutex, SerializedInfo, MSG_CHANNEL_BUF_SIZE>;
+type InternalNatsReceiver = Receiver<'static, ThreadModeRawMutex, SerializedInfo, MSG_CHANNEL_BUF_SIZE>;
+
+static MSG: StaticCell<InternalNatsChannel> =
     StaticCell::new();
 
 // Heap setup
@@ -122,15 +137,6 @@ fn get_rcc_config() -> rcc::Config {
     rcc_config
 }
 
-fn cbor_serializer(
-    value: &dyn erased_serde::Serialize,
-) -> Result<alloc::vec::Vec<u8>, erased_serde::Error> {
-    let mut buffer = alloc::vec::Vec::new();
-    let mut serializer = minicbor_serde::Serializer::new(&mut buffer);
-    value.erased_serialize(&mut <dyn erased_serde::Serializer>::erase(&mut serializer))?;
-    Ok(buffer)
-}
-
 /// Watchdog petting task
 #[embassy_executor::task]
 async fn petter(mut watchdog: IndependentWatchdog<'static, IWDG1>) {
@@ -148,6 +154,16 @@ async fn net_task(mut runner: Runner<'static, EthDriver>) -> ! {
 #[embassy_executor::task]
 async fn nats_task(mut runner: embassy_nats::Runner<'static, UserPwdAuthenticator>) -> ! {
     runner.run().await
+}
+
+#[embassy_executor::task]
+pub async fn can_receiver_task(mut can_receiver: UmbilicalCanReceiver) -> ! {
+    can_receiver.run().await
+}
+
+#[embassy_executor::task]
+pub async fn can_sender_task(mut can_sender: UmbilicalCanSender) -> ! {
+    can_sender.run().await
 }
 
 pub async fn parse_or_resolve(
@@ -239,7 +255,8 @@ async fn main(spawner: Spawner) {
     info!("Network initialized");
 
     // get unix time over ntp
-    let unix_time_offset_us = timesync::sync_internet_time(&stack).await;
+    let unix_us = timesync::sync_internet_time(&stack).await;
+    COM_CHANNELS.set_utc_us(unix_us, NTP_TIME_SRC_UPDATE_PRIO);
 
     // Initizlize Nats socket
     let socket = TcpSocket::new(stack, TCP_RX_BUF.init([0; _]), TCP_TX_BUF.init([0; _]));
@@ -269,6 +286,7 @@ async fn main(spawner: Spawner) {
     ).await;
 
     spawner.spawn(nats_task(runner).unwrap());
+    let internal_nats_channel = MSG.init(Channel::new());
 
     // can 1 configuration
     let mut can_configurator =
@@ -287,15 +305,23 @@ async fn main(spawner: Spawner) {
         C_RX_BUF.init(RxFdBuf::<C_RX_BUF_SIZE>::new()),
     );
 
+    // Setup can sender and receiver runners
+    let can_receiver = UmbilicalCanReceiver::new(
+        can_instance.reader(),
+        &COM_CHANNELS,
+        Reserialize::new(&COM_CHANNELS, internal_nats_channel.sender()),
+    );
+    let can_sender = UmbilicalCanSender::new(can_instance.writer(), &COM_CHANNELS);
+
     // set can standby pin to low
     let _can_1_standby = Output::new(p.PE2, Level::Low, Speed::Low);
     // let _can_2_standby = Output::new(p.PE3, Level::Low, Speed::Low);
 
-    let channel = MSG.init(Channel::new());
 
-    spawner.spawn(io_threads::can_receiver_task(can_instance.reader(), unix_time_offset_us, channel.sender()).unwrap());
-    spawner.spawn(io_threads::nats_sender_task(client, channel.dyn_receiver()).unwrap());
-    spawner.spawn(io_threads::telecommand_task(can_instance.writer(), tc_client).unwrap());
+    spawner.spawn(can_receiver_task(can_receiver).unwrap());
+    spawner.spawn(can_sender_task(can_sender).unwrap());
+    spawner.spawn(io_threads::nats_sender_task(client, internal_nats_channel.receiver()).unwrap());
+    spawner.spawn(io_threads::telecommand_task(COM_CHANNELS.get_tm_sender(), tc_client).unwrap());
 
     core::future::pending::<()>().await;
 }
