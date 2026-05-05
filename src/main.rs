@@ -63,8 +63,8 @@ type InternalNatsChannel = Channel<ThreadModeRawMutex, SerializedInfo, MSG_CHANN
 type InternalNatsSender = Sender<'static, ThreadModeRawMutex, SerializedInfo, MSG_CHANNEL_BUF_SIZE>;
 type InternalNatsReceiver = Receiver<'static, ThreadModeRawMutex, SerializedInfo, MSG_CHANNEL_BUF_SIZE>;
 
-static MSG: StaticCell<InternalNatsChannel> =
-    StaticCell::new();
+static INTERNAL_NATS_CHANNEL: InternalNatsChannel =
+    Channel::new();
 
 // Heap setup
 const HEAP_KB: usize = 64;
@@ -86,11 +86,10 @@ const TCP_TX_BUF_SIZE: usize = 1024;
 static TCP_TX_BUF: StaticCell<[u8; TCP_TX_BUF_SIZE]> = StaticCell::new();
 
 // NATS
-static NATS_STORAGE: StaticCell<embassy_nats::Storage> = StaticCell::new();
+static NATS_STORAGE: embassy_nats::Storage = embassy_nats::Storage::new();
 const NATS_ADDR: &str = "nats.tichygames.de";
 
-static TC_CH: StaticCell<embassy_nats::MsgChannel> =
-    StaticCell::new();
+static TC_CH: embassy_nats::MsgChannel = embassy_nats::MsgChannel::new();
 
 // Static can buffer
 const C_RX_BUF_SIZE: usize = 1024;
@@ -272,21 +271,18 @@ async fn main(spawner: Spawner) {
         }
     };
 
-    let nats_storage = NATS_STORAGE.init(embassy_nats::Storage::new());
-
     // nats connection
     let (client, runner) =
-        embassy_nats::new_with_user_pwd("nats", "nats", socket_addr, socket, nats_storage);
+        embassy_nats::new_with_user_pwd("nats", "nats", socket_addr, socket, &NATS_STORAGE);
 
     // nats tc subscription
     let mut tc_client = client.clone();
     tc_client.subscribe(
         alloc::string::String::from(internal_msgs::Telecommand.address()),
-        TC_CH.init(embassy_nats::MsgChannel::new())
+        &TC_CH
     ).await;
 
     spawner.spawn(nats_task(runner).unwrap());
-    let internal_nats_channel = MSG.init(Channel::new());
 
     // can 1 configuration
     let mut can_configurator =
@@ -309,7 +305,7 @@ async fn main(spawner: Spawner) {
     let can_receiver = UmbilicalCanReceiver::new(
         can_instance.reader(),
         &COM_CHANNELS,
-        Reserialize::new(&COM_CHANNELS, internal_nats_channel.sender()),
+        Reserialize::new(&COM_CHANNELS, INTERNAL_NATS_CHANNEL.sender()),
     );
     let can_sender = UmbilicalCanSender::new(can_instance.writer(), &COM_CHANNELS);
 
@@ -320,7 +316,7 @@ async fn main(spawner: Spawner) {
 
     spawner.spawn(can_receiver_task(can_receiver).unwrap());
     spawner.spawn(can_sender_task(can_sender).unwrap());
-    spawner.spawn(io_threads::nats_sender_task(client, internal_nats_channel.receiver()).unwrap());
+    spawner.spawn(io_threads::nats_sender_task(client, INTERNAL_NATS_CHANNEL.receiver()).unwrap());
     spawner.spawn(io_threads::telecommand_task(COM_CHANNELS.get_tm_sender(), tc_client).unwrap());
 
     core::future::pending::<()>().await;
