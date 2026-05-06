@@ -1,8 +1,7 @@
-use alloc::string::String;
 use embassy_stm32::can::frame::FdEnvelope;
 use south_common::{chell::{ChellDefinition, ChellValue}, definitions::internal_msgs, obdh::OnTMFunc, types::Telecommand};
 
-use crate::{InternalNatsReceiver, InternalNatsSender, UmbilicalChellUnion, UmbilicalComChannels, UmbilicalTMSender};
+use crate::{UmbilicalChellUnion, UmbilicalComChannels, UmbilicalTMSender};
 
 fn cbor_serializer(
     value: &dyn erased_serde::Serialize,
@@ -15,25 +14,25 @@ fn cbor_serializer(
 
 pub struct Reserialize {
     obdh_com_channels: &'static UmbilicalComChannels,
-    nats_sender: InternalNatsSender
+    nats_client: embassy_nats::Client<'static>,
 }
 impl Reserialize {
     pub fn new(
         obdh_com_channels: &'static UmbilicalComChannels,
-        nats_sender: InternalNatsSender
+        nats_client: embassy_nats::Client<'static>,
     ) -> Self {
-        Self { obdh_com_channels, nats_sender }
+        Self { obdh_com_channels, nats_client }
     }
 }
 impl OnTMFunc for Reserialize {
-    async fn call(&self, def: &dyn ChellDefinition, envelope: &FdEnvelope) {
+    async fn call(&mut self, def: &dyn ChellDefinition, envelope: &FdEnvelope) {
         if let Ok(values) = def.reserialize(
             &envelope.frame.data(),
             &self.obdh_com_channels.get_utc_us(),
             &cbor_serializer,
         ) {
             for serialized_value in values {
-                self.nats_sender.send(serialized_value).await;
+                self.nats_client.publish(serialized_value.0.into(), serialized_value.1).await;
             }
         }
     }
@@ -44,26 +43,18 @@ pub async fn telecommand_task(
     can_sender: UmbilicalTMSender,
     mut nats_client: embassy_nats::Client<'static>
 ) {
+    let mut tc_counter = 0u32;
     loop {
         let nats_msg = nats_client.receive().await;
         if let Ok((_, cmd)) = Telecommand::read(&nats_msg.data) {
+            tc_counter += 1;
             defmt::info!("Cmd: {}", nats_msg.data);
             let container = UmbilicalChellUnion::new(&internal_msgs::Telecommand, &cmd).unwrap();
             can_sender.send(container).await;
+            // TODO use actual common ground serialisation (CBOR + timestamp)
+            nats_client.publish(crate::ground_tm_defs::groundstation::umbilical::TelecommandCounter.address().into(), tc_counter.to_le_bytes().to_vec()).await;
         } else {
             defmt::warn!("could not decode cmd");
         }
-    }
-}
-
-/// send tm via nats
-#[embassy_executor::task]
-pub async fn nats_sender_task(
-    mut nats_client: embassy_nats::Client<'static>,
-    receiver: InternalNatsReceiver,
-) {
-    loop {
-        let (address, bytes) = receiver.receive().await;
-        nats_client.publish(String::from(address), bytes).await;
     }
 }

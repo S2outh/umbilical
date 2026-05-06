@@ -1,13 +1,15 @@
 #![no_std]
 #![no_main]
+#![feature(const_cmp)]
+#![feature(const_trait_impl)]
 
 mod io_threads;
 mod timesync;
 mod ksz8863_phy_drv;
+mod ground_tm_defs;
 
 use core::net::SocketAddr;
 
-use alloc::vec::Vec;
 use defmt::{info, warn};
 use defmt_rtt as _;
 use embassy_executor::Spawner;
@@ -17,7 +19,10 @@ use embassy_net::tcp::TcpSocket;
 use embassy_net::{Runner, Stack, StackResources};
 use embassy_stm32::can::{self, CanConfigurator, RxFdBuf, TxFdBuf};
 use embassy_stm32::eth::{Ethernet, PacketQueue};
-use embassy_stm32::gpio::{Level, Output, Speed};
+use embassy_stm32::exti::{self, ExtiInput};
+use embassy_stm32::gpio::{Level, Output, Pull, Speed};
+use embassy_stm32::interrupt::typelevel::EXTI15_10;
+use embassy_stm32::mode::Async;
 use embassy_stm32::peripherals::{self, FDCAN1, FDCAN2, IWDG1, RNG};
 use embassy_stm32::rcc;
 use embassy_stm32::rng::{self, Rng};
@@ -25,8 +30,6 @@ use embassy_stm32::spi::{self, Spi};
 use embassy_stm32::time::mhz;
 use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_stm32::{Config, bind_interrupts};
-use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
-use embassy_sync::channel::{Channel, Receiver, Sender};
 use embassy_time::{Duration, Timer};
 use panic_probe as _;
 use south_common::chell::ChellDefinition;
@@ -48,23 +51,11 @@ const WATCHDOG_PETTING_INTERVAL_US: u32 = WATCHDOG_TIMEOUT_US / 2;
 const NTP_TIME_SRC_UPDATE_PRIO: u8 = 10;
 
 // Obdh types
-gen_obdh_types!(Umbilical, internal_msgs::Telecommand, on_tm => io_threads::Reserialize);
+gen_obdh_types!(Umbilical, internal_msgs, on_tm => io_threads::Reserialize);
 
 // internal messaging channels
 static COM_CHANNELS: UmbilicalComChannels =
     UmbilicalComChannels::new(2);
-
-// Serialized value channel
-const MSG_CHANNEL_BUF_SIZE: usize = 30;
-
-type SerializedInfo = (&'static str, Vec<u8>);
-
-type InternalNatsChannel = Channel<ThreadModeRawMutex, SerializedInfo, MSG_CHANNEL_BUF_SIZE>;
-type InternalNatsSender = Sender<'static, ThreadModeRawMutex, SerializedInfo, MSG_CHANNEL_BUF_SIZE>;
-type InternalNatsReceiver = Receiver<'static, ThreadModeRawMutex, SerializedInfo, MSG_CHANNEL_BUF_SIZE>;
-
-static INTERNAL_NATS_CHANNEL: InternalNatsChannel =
-    Channel::new();
 
 // Heap setup
 const HEAP_KB: usize = 64;
@@ -101,6 +92,8 @@ static C_TX_BUF: StaticCell<TxFdBuf<C_TX_BUF_SIZE>> = StaticCell::new();
 bind_interrupts!(struct Irqs {
     ETH => embassy_stm32::eth::InterruptHandler;
     RNG => rng::InterruptHandler<RNG>;
+
+    EXTI15_10 => exti::InterruptHandler<EXTI15_10>;
 
     FDCAN1_IT0 => can::IT0InterruptHandler<FDCAN1>;
     FDCAN1_IT1 => can::IT1InterruptHandler<FDCAN1>;
@@ -143,6 +136,16 @@ async fn petter(mut watchdog: IndependentWatchdog<'static, IWDG1>) {
         watchdog.pet();
         Timer::after_micros(WATCHDOG_PETTING_INTERVAL_US.into()).await;
     }
+}
+
+#[embassy_executor::task]
+async fn launch_detection_task(msg_channel: UmbilicalTMSender, mut launch_detection: ExtiInput<'static, Async>) {
+    loop {
+        launch_detection.wait_for_rising_edge().await;
+        let container = UmbilicalChellUnion::new(&internal_msgs::LaunchDetected, &()).unwrap();
+        msg_channel.send(container).await;
+    }
+
 }
 
 #[embassy_executor::task]
@@ -190,7 +193,11 @@ async fn main(spawner: Spawner) {
     // unleash independent watchdog
     let mut watchdog = IndependentWatchdog::new(p.IWDG1, WATCHDOG_TIMEOUT_US);
     watchdog.unleash();
+    
+    // Launch detection pin
+    let launch_detection = ExtiInput::new(p.PE15, p.EXTI15, Pull::Up, Irqs);
 
+    // Ethernet phy setup
     let mut ksz_reset = Output::new(p.PB0, Level::High, Speed::Low);
     let led_phy1 = Output::new(p.PD12, Level::Low, Speed::Low);
     let led_phy2 = Output::new(p.PD13, Level::Low, Speed::Low);
@@ -305,7 +312,7 @@ async fn main(spawner: Spawner) {
     let can_receiver = UmbilicalCanReceiver::new(
         can_instance.reader(),
         &COM_CHANNELS,
-        Reserialize::new(&COM_CHANNELS, INTERNAL_NATS_CHANNEL.sender()),
+        Reserialize::new(&COM_CHANNELS, client),
     );
     let can_sender = UmbilicalCanSender::new(can_instance.writer(), &COM_CHANNELS);
 
@@ -316,8 +323,8 @@ async fn main(spawner: Spawner) {
 
     spawner.spawn(can_receiver_task(can_receiver).unwrap());
     spawner.spawn(can_sender_task(can_sender).unwrap());
-    spawner.spawn(io_threads::nats_sender_task(client, INTERNAL_NATS_CHANNEL.receiver()).unwrap());
     spawner.spawn(io_threads::telecommand_task(COM_CHANNELS.get_tm_sender(), tc_client).unwrap());
+    spawner.spawn(launch_detection_task(COM_CHANNELS.get_tm_sender(), launch_detection).unwrap());
 
     core::future::pending::<()>().await;
 }
