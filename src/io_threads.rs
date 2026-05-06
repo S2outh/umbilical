@@ -1,7 +1,7 @@
 use embassy_stm32::can::frame::FdEnvelope;
-use south_common::{chell::{ChellDefinition, ChellValue}, definitions::internal_msgs, obdh::OnTMFunc, types::Telecommand};
+use south_common::{chell::{ChellDefinition, ChellValue, ground::SerializableChellValue}, definitions::internal_msgs, obdh::OnTMFunc, types::Telecommand};
 
-use crate::{UmbilicalChellUnion, UmbilicalComChannels, UmbilicalTMSender};
+use crate::{UmbilicalChellUnion, UmbilicalComChannels, ground_tm_defs::groundstation};
 
 fn cbor_serializer(
     value: &dyn erased_serde::Serialize,
@@ -40,10 +40,12 @@ impl OnTMFunc for Reserialize {
 
 #[embassy_executor::task]
 pub async fn telecommand_task(
-    can_sender: UmbilicalTMSender,
+    obdh_com_channels: &'static UmbilicalComChannels,
     mut nats_client: embassy_nats::Client<'static>
 ) {
     let mut tc_counter = 0u32;
+    let tc_counter_def = groundstation::umbilical::TelecommandCounter;
+    let can_sender = obdh_com_channels.get_tm_sender();
     loop {
         let nats_msg = nats_client.receive().await;
         if let Ok((_, cmd)) = Telecommand::read(&nats_msg.data) {
@@ -51,8 +53,15 @@ pub async fn telecommand_task(
             defmt::info!("Cmd: {}", nats_msg.data);
             let container = UmbilicalChellUnion::new(&internal_msgs::Telecommand, &cmd).unwrap();
             can_sender.send(container).await;
-            // TODO use actual common ground serialisation (CBOR + timestamp)
-            nats_client.publish(crate::ground_tm_defs::groundstation::umbilical::TelecommandCounter.address().into(), tc_counter.to_le_bytes().to_vec()).await;
+            let serialized_tc_counter = tc_counter.serialize_ground(
+                &tc_counter_def,
+                &obdh_com_channels.get_utc_us(),
+                &cbor_serializer
+            );
+            nats_client.publish(
+                tc_counter_def.address().into(),
+                serialized_tc_counter.unwrap()[0].1.to_vec()
+            ).await;
         } else {
             defmt::warn!("could not decode cmd");
         }

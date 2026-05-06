@@ -323,7 +323,7 @@ async fn main(spawner: Spawner) {
 
     spawner.spawn(can_receiver_task(can_receiver).unwrap());
     spawner.spawn(can_sender_task(can_sender).unwrap());
-    spawner.spawn(io_threads::telecommand_task(COM_CHANNELS.get_tm_sender(), tc_client).unwrap());
+    spawner.spawn(io_threads::telecommand_task(&COM_CHANNELS, tc_client).unwrap());
     spawner.spawn(launch_detection_task(COM_CHANNELS.get_tm_sender(), launch_detection).unwrap());
 
     core::future::pending::<()>().await;
