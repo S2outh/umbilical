@@ -1132,7 +1132,7 @@ dependencies = [
 [[package]]
 name = "south-common"
 version = "4.0.0"
-source = "git+https://github.com/S2outh/south-common.git#c998afbaf8ed7f3efd04c2607d5d87e0fa4dffab"
+source = "git+https://github.com/S2outh/south-common.git#b2e85f0e939a6da8df528b317c1bebd795929753"
 dependencies = [
  "bitflags 2.11.1",
  "chell",
