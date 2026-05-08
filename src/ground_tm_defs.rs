@@ -5,5 +5,8 @@ mod groundstation {
     mod umbilical {
         #[chv(u32)]
         struct TelecommandCounter;
+
+        #[chv(f32)]
+        struct InternalTemperature;
     }
 }

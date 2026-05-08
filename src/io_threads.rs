@@ -1,7 +1,8 @@
-use embassy_stm32::can::frame::FdEnvelope;
+use embassy_stm32::{can::frame::FdEnvelope, exti::ExtiInput, mode::Async};
+use embassy_time::{Duration, Ticker};
 use south_common::{chell::{ChellDefinition, ground::SerializableChellValue}, definitions::internal_msgs, obdh::OnTMFunc, types::Telecommand};
 
-use crate::{UmbilicalChellUnion, UmbilicalComChannels, ground_tm_defs::groundstation};
+use crate::{UmbilicalChellUnion, UmbilicalComChannels, UmbilicalTMSender, dts_drv::DtsDrv, ground_tm_defs::groundstation};
 
 fn cbor_serializer(
     value: &dyn erased_serde::Serialize,
@@ -66,4 +67,42 @@ pub async fn telecommand_task(
             defmt::warn!("could not decode cmd");
         }
     }
+}
+
+// internal temperature
+#[embassy_executor::task]
+pub async fn dts_task(
+    obdh_com_channels: &'static UmbilicalComChannels,
+    mut nats_client: embassy_nats::Client<'static>,
+    mut dts: DtsDrv<'static>
+) {
+    const DTS_LOOP_LEN: Duration = Duration::from_millis(1000);
+    let mut ticker = Ticker::every(DTS_LOOP_LEN);
+    let temp_def = groundstation::umbilical::InternalTemperature;
+    loop {
+        let temp = dts.read().await;
+
+        let serialized_temp = temp.serialize_ground(
+            &temp_def,
+            &obdh_com_channels.get_utc_us(),
+            &cbor_serializer
+        );
+        nats_client.publish(
+            temp_def.address().into(),
+            serialized_temp.unwrap()[0].1.to_vec()
+        ).await;
+
+        ticker.next().await;
+    }
+}
+
+// Launch detection
+#[embassy_executor::task]
+pub async fn launch_detection_task(msg_channel: UmbilicalTMSender, mut launch_detection: ExtiInput<'static, Async>) {
+    loop {
+        launch_detection.wait_for_rising_edge().await;
+        let container = UmbilicalChellUnion::new(&internal_msgs::LaunchDetected, &()).unwrap();
+        msg_channel.send(container).await;
+    }
+
 }

@@ -7,6 +7,7 @@ mod io_threads;
 mod timesync;
 mod ksz8863_phy_drv;
 mod ground_tm_defs;
+mod dts_drv;
 
 use core::net::SocketAddr;
 
@@ -17,12 +18,12 @@ use embassy_nats::UserPwdAuthenticator;
 use embassy_net::dns::DnsQueryType;
 use embassy_net::tcp::TcpSocket;
 use embassy_net::{Runner, Stack, StackResources};
+use embassy_stm32::dts::{self, Dts};
 use embassy_stm32::can::{self, CanConfigurator, RxFdBuf, TxFdBuf};
 use embassy_stm32::eth::{Ethernet, PacketQueue};
 use embassy_stm32::exti::{self, ExtiInput};
 use embassy_stm32::gpio::{Level, Output, Pull, Speed};
 use embassy_stm32::interrupt::typelevel::EXTI15_10;
-use embassy_stm32::mode::Async;
 use embassy_stm32::peripherals::{self, FDCAN1, FDCAN2, IWDG1, RNG};
 use embassy_stm32::rcc;
 use embassy_stm32::rng::{self, Rng};
@@ -38,6 +39,7 @@ use south_common::definitions::{internal_msgs, telemetry as tm};
 use south_common::gen_obdh_types;
 use static_cell::StaticCell;
 
+use crate::dts_drv::DtsDrv;
 use crate::io_threads::Reserialize;
 use crate::ksz8863_phy_drv::Ksz8863Phy;
 
@@ -93,7 +95,11 @@ bind_interrupts!(struct Irqs {
     ETH => embassy_stm32::eth::InterruptHandler;
     RNG => rng::InterruptHandler<RNG>;
 
+    // Launch detection
     EXTI15_10 => exti::InterruptHandler<EXTI15_10>;
+
+    // Temperature
+    DTS => dts::InterruptHandler;
 
     FDCAN1_IT0 => can::IT0InterruptHandler<FDCAN1>;
     FDCAN1_IT1 => can::IT1InterruptHandler<FDCAN1>;
@@ -135,16 +141,6 @@ async fn petter(mut watchdog: IndependentWatchdog<'static, IWDG1>) {
         watchdog.pet();
         Timer::after_micros(WATCHDOG_PETTING_INTERVAL_US.into()).await;
     }
-}
-
-#[embassy_executor::task]
-async fn launch_detection_task(msg_channel: UmbilicalTMSender, mut launch_detection: ExtiInput<'static, Async>) {
-    loop {
-        launch_detection.wait_for_rising_edge().await;
-        let container = UmbilicalChellUnion::new(&internal_msgs::LaunchDetected, &()).unwrap();
-        msg_channel.send(container).await;
-    }
-
 }
 
 #[embassy_executor::task]
@@ -195,6 +191,13 @@ async fn main(spawner: Spawner) {
     
     // Launch detection pin
     let launch_detection = ExtiInput::new(p.PE15, p.EXTI15, Pull::Up, Irqs);
+    spawner.spawn(io_threads::launch_detection_task(COM_CHANNELS.get_tm_sender(), launch_detection).unwrap());
+
+    // internal temperature sensor
+    let mut dts_config = dts::Config::default();
+    dts_config.sample_time = dts::SampleTime::ClockCycles15;
+    let dts = Dts::new(p.DTS, Irqs, dts_config);
+    let dts_drv = DtsDrv::new(dts, dts_config.sample_time);
 
     // Ethernet phy setup
     let mut ksz_reset = Output::new(p.PB0, Level::High, Speed::Low);
@@ -311,7 +314,7 @@ async fn main(spawner: Spawner) {
     let can_receiver = UmbilicalCanReceiver::new(
         can_instance.reader(),
         &COM_CHANNELS,
-        Reserialize::new(&COM_CHANNELS, client),
+        Reserialize::new(&COM_CHANNELS, client.clone()),
     );
     let can_sender = UmbilicalCanSender::new(can_instance.writer(), &COM_CHANNELS);
 
@@ -319,11 +322,10 @@ async fn main(spawner: Spawner) {
     let _can_1_standby = Output::new(p.PE2, Level::Low, Speed::Low);
     // let _can_2_standby = Output::new(p.PE3, Level::Low, Speed::Low);
 
-
     spawner.spawn(can_receiver_task(can_receiver).unwrap());
     spawner.spawn(can_sender_task(can_sender).unwrap());
     spawner.spawn(io_threads::telecommand_task(&COM_CHANNELS, tc_client).unwrap());
-    spawner.spawn(launch_detection_task(COM_CHANNELS.get_tm_sender(), launch_detection).unwrap());
+    spawner.spawn(io_threads::dts_task(&COM_CHANNELS, client, dts_drv).unwrap());
 
     core::future::pending::<()>().await;
 }
