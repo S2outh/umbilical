@@ -1,3 +1,4 @@
+use alloc::string::String;
 use embassy_stm32::{can::frame::FdEnvelope, exti::ExtiInput, mode::Async};
 use embassy_time::{Duration, Ticker};
 use south_common::{chell::{ChellDefinition, ground::SerializableChellValue}, definitions::internal_msgs, obdh::OnTMFunc, types::Telecommand};
@@ -54,15 +55,19 @@ pub async fn telecommand_task(
             defmt::info!("Cmd: {}", nats_msg.data);
             let container = UmbilicalChellUnion::new(&internal_msgs::Telecommand, &cmd).unwrap();
             can_sender.send(container).await;
-            let serialized_tc_counter = tc_counter.serialize_ground(
+
+            if let Ok(values) = tc_counter.serialize_ground(
                 &tc_counter_def,
                 &obdh_com_channels.get_utc_us(),
                 &cbor_serializer
-            );
-            nats_client.publish(
-                tc_counter_def.address().into(),
-                serialized_tc_counter.unwrap()[0].1.to_vec()
-            ).await;
+            ) {
+                for serialized_value in values {
+                    nats_client.publish(
+                        String::from(serialized_value.0),
+                        serialized_value.1
+                    ).await;
+                }
+            }
         } else {
             defmt::warn!("could not decode cmd");
         }
@@ -82,15 +87,18 @@ pub async fn dts_task(
     loop {
         let temp = dts.read().await;
 
-        let serialized_temp = temp.serialize_ground(
+        if let Ok(values) = temp.serialize_ground(
             &temp_def,
             &obdh_com_channels.get_utc_us(),
             &cbor_serializer
-        );
-        nats_client.publish(
-            temp_def.address().into(),
-            serialized_temp.unwrap()[0].1.to_vec()
-        ).await;
+        ) {
+            for serialized_value in values {
+                nats_client.publish(
+                    String::from(serialized_value.0),
+                    serialized_value.1
+                ).await;
+            }
+        }
 
         ticker.next().await;
     }
