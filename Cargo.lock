@@ -802,7 +802,7 @@ dependencies = [
 [[package]]
 name = "lsm6dsv32"
 version = "0.1.0"
-source = "git+https://github.com/S2outh/imu-driver.git#c7d6a65f1e1db4d82003c167eeb5f0e1e5f60596"
+source = "git+https://github.com/S2outh/imu-driver.git#03f48a425dbddc78985ccf676ff60d3bbc8992fd"
 
 [[package]]
 name = "managed"
