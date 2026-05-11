@@ -147,7 +147,6 @@ impl Phy for Ksz8863Phy<'_> {
     }
 
     fn poll_link(&mut self, cx: &mut Context) -> bool {
-
         const POLL_INTERVALL: Duration = Duration::from_millis(300);
 
         let now = Instant::now();
@@ -176,13 +175,13 @@ impl Phy for Ksz8863Phy<'_> {
 //     next_diag_at: Instant,
 //     cached_link: bool,
 // }
-// 
+//
 // impl<SM: StationManagement> Ksz8863Phy<SM> {
 //     fn new(sm: SM, port_phys: [u8; 2]) -> Self {
 //         let mut phy_addrs = [u8::MAX; 4];
 //         phy_addrs[0] = port_phys[0];
 //         phy_addrs[1] = port_phys[1];
-// 
+//
 //         Self {
 //             sm,
 //             port_phys: phy_addrs,
@@ -193,27 +192,27 @@ impl Phy for Ksz8863Phy<'_> {
 //             cached_link: false,
 //         }
 //     }
-// 
+//
 //     fn scan_phys(&mut self) {
 //         let mut found = [u8::MAX; 4];
 //         let mut idx = 0usize;
-// 
+//
 //         for addr in 0u8..32 {
 //             let id1 = self.sm.smi_read(addr, 0x02);
 //             let id2 = self.sm.smi_read(addr, 0x03);
-// 
+//
 //             if id1 == 0 || id1 == 0xFFFF {
 //                 continue;
 //             }
-// 
+//
 //             info!("PHY probe addr={} id1={} id2={}", addr, id1, id2);
-// 
+//
 //             if id1 == 0x0022 && (id2 & 0xFFF0) == 0x1430 && idx < found.len() {
 //                 found[idx] = addr;
 //                 idx += 1;
 //             }
 //         }
-// 
+//
 //         if idx >= 2 {
 //             self.port_phys = found;
 //             self.port_phys_count = idx;
@@ -233,7 +232,7 @@ impl Phy for Ksz8863Phy<'_> {
 //             self.port_phys_count = 2;
 //         }
 //     }
-// 
+//
 //     fn read_link_latched(&mut self, phy_addr: u8) -> bool {
 //         self.with_miim(|bus| {
 //             let mut phy = bus.phy(phy_addr);
@@ -245,39 +244,39 @@ impl Phy for Ksz8863Phy<'_> {
 //             bsr.read().link_status().bit_is_set()
 //         })
 //     }
-// 
+//
 //     fn with_miim<R>(&mut self, f: impl FnOnce(&mut ksz8863::Miim<KszMiim<'_, SM>>) -> R) -> R {
 //         let iface = KszMiim { sm: &mut self.sm };
 //         let mut miim_bus = ksz8863::Miim(iface);
 //         f(&mut miim_bus)
 //     }
-// 
+//
 //     fn any_port_link_up(&mut self) -> bool {
 //         let port_phys = self.port_phys;
 //         let n = self.port_phys_count;
 //         let mut ext_link = false;
 //         let mut cpu_link = false;
-// 
+//
 //         for phy_addr in port_phys[..n].iter().copied() {
 //             let up = self.read_link_latched(phy_addr);
 //             if !up {
 //                 continue;
 //             }
-// 
+//
 //             if phy_addr == 3 {
 //                 cpu_link = true;
 //             } else {
 //                 ext_link = true;
 //             }
 //         }
-// 
+//
 //         if !ext_link && cpu_link {
 //             warn!("No external PHY link, using PHY3 link fallback");
 //         }
-// 
+//
 //         ext_link || cpu_link
 //     }
-// 
+//
 //     fn diag_ports(&mut self) {
 //         let port_phys = self.port_phys;
 //         let n = self.port_phys_count;
@@ -289,25 +288,25 @@ impl Phy for Ksz8863Phy<'_> {
 //             let bcr_raw = self.sm.smi_read(phy_addr, 0x00); // config register
 //             let link = (bsr_raw & (1 << 2)) != 0;
 //             let an_done = (bsr_raw & (1 << 5)) != 0;
-// 
+//
 //             if link && (1..=3).contains(&phy_addr) {
 //                 link_bits |= 1 << (phy_addr - 1);
 //             }
-// 
+//
 //             info!(
 //                 "PHY {} id1={} id2={} config={:b} status={:b} link={} an_done={}",
 //                 phy_addr, id1, id2, bcr_raw, bsr_raw, link, an_done,
 //             );
 //         }
-// 
+//
 //         PHY_LINK_BITS.store(link_bits, Ordering::Relaxed);
 //     }
 // }
-// 
+//
 // impl<SM: StationManagement> Phy for Ksz8863Phy<SM> {
 //     fn phy_reset(&mut self) {
 //         self.scan_phys();
-// 
+//
 //         let port_phys = self.port_phys;
 //         let n = self.port_phys_count;
 //         self.with_miim(|bus| {
@@ -317,14 +316,14 @@ impl Phy for Ksz8863Phy<'_> {
 //             }
 //         });
 //     }
-// 
+//
 //     fn phy_init(&mut self) {
 //         let port_phys = self.port_phys;
 //         let n = self.port_phys_count;
 //         self.with_miim(|bus| {
 //             for phy_addr in port_phys[..n].iter().copied() {
 //                 let mut phy = bus.phy(phy_addr);
-// 
+//
 //                 // Config link to STM
 //                 if phy_addr == 3 {
 //                     let _ = phy.bcr().write(|w| {
@@ -359,19 +358,19 @@ impl Phy for Ksz8863Phy<'_> {
 //             }
 //         });
 //     }
-// 
+//
 //     fn poll_link(&mut self, cx: &mut Context) -> bool {
 //         let now = Instant::now();
 //         if now >= self.next_diag_at {
 //             self.diag_ports();
 //             self.next_diag_at = now + Duration::from_secs(2);
 //         }
-// 
+//
 //         if now < self.next_poll_at {
 //             cx.waker().wake_by_ref();
 //             return self.cached_link;
 //         }
-// 
+//
 //         self.cached_link = self.any_port_link_up();
 //         self.next_poll_at = now + self.poll_interval;
 //         self.cached_link
@@ -381,18 +380,18 @@ impl Phy for Ksz8863Phy<'_> {
 // struct KszMiim<'a, SM: StationManagement> {
 //     sm: &'a mut SM,
 // }
-// 
+//
 // impl<SM: StationManagement> mdio::miim::Read for KszMiim<'_, SM> {
 //     type Error = Infallible;
-// 
+//
 //     fn read(&mut self, phy_addr: u8, reg_addr: u8) -> Result<u16, Self::Error> {
 //         Ok(self.sm.smi_read(phy_addr, reg_addr))
 //     }
 // }
-// 
+//
 // impl<SM: StationManagement> mdio::miim::Write for KszMiim<'_, SM> {
 //     type Error = Infallible;
-// 
+//
 //     fn write(&mut self, phy_addr: u8, reg_addr: u8, data: u16) -> Result<(), Self::Error> {
 //         self.sm.smi_write(phy_addr, reg_addr, data);
 //         Ok(())
