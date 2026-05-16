@@ -369,7 +369,7 @@ dependencies = [
 [[package]]
 name = "embassy-nats"
 version = "0.1.0"
-source = "git+https://github.com/S2outh/embassy-nats.git#e91be43c2b026d11abbe08b0739ec79eaf735442"
+source = "git+https://github.com/S2outh/embassy-nats.git#c9a15e7c6b21affd670afb73b5b7e82c0d308b63"
 dependencies = [
  "cortex-m",
  "cortex-m-rt",
@@ -1132,7 +1132,7 @@ dependencies = [
 [[package]]
 name = "south-common"
 version = "4.0.0"
-source = "git+https://github.com/S2outh/south-common.git#e347cff9d9465f25da71287506cf0ae9e8448bd1"
+source = "git+https://github.com/S2outh/south-common.git#f71650b4a153594626044f83fc6af46fafcdf99e"
 dependencies = [
  "bitflags 2.11.1",
  "chell",
