@@ -3,16 +3,18 @@
 #![feature(const_cmp)]
 #![feature(const_trait_impl)]
 
+extern crate alloc;
+
 mod io_threads;
 mod timesync;
 mod ksz8863_phy_drv;
 mod ground_tm_defs;
 mod dts_drv;
 
-use core::net::SocketAddr;
+use {defmt_rtt as _, panic_probe as _};
 
 use defmt::{info, warn};
-use defmt_rtt as _;
+use embedded_alloc::LlffHeap as Heap;
 use embassy_executor::Spawner;
 use embassy_nats::UserPwdAuthenticator;
 use embassy_net::dns::DnsQueryType;
@@ -32,12 +34,12 @@ use embassy_stm32::time::mhz;
 use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_stm32::{Config, bind_interrupts};
 use embassy_time::{Duration, Timer};
-use panic_probe as _;
 use south_common::chell::ChellDefinition;
 use south_common::configs::can_config::CanPeriphConfig;
 use south_common::definitions::{internal_msgs, telemetry as tm};
 use south_common::gen_obdh_types;
 use static_cell::StaticCell;
+use core::net::SocketAddr;
 
 use crate::dts_drv::DtsDrv;
 use crate::io_threads::Reserialize;
@@ -63,8 +65,7 @@ static COM_CHANNELS: UmbilicalComChannels =
 const HEAP_KB: usize = 64;
 
 #[global_allocator]
-static ALLOCATOR: emballoc::Allocator<{ HEAP_KB * 1024 }> = emballoc::Allocator::new();
-extern crate alloc;
+static HEAP: Heap = Heap::empty();
 
 // queues for raw packets before and after processing
 static PACKET_QUEUE: StaticCell<PacketQueue<4, 4>> = StaticCell::new();
@@ -183,6 +184,12 @@ async fn main(spawner: Spawner) {
     let mut config = Config::default();
     config.rcc = get_rcc_config();
     let p = embassy_stm32::init(config);
+
+    // init global allocator
+    unsafe {
+        embedded_alloc::init!(HEAP, HEAP_KB * 1024);
+    }
+
     info!("Launching");
 
     // unleash independent watchdog
