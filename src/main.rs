@@ -82,6 +82,8 @@ static TCP_TX_BUF: StaticCell<[u8; TCP_TX_BUF_SIZE]> = StaticCell::new();
 // NATS
 static NATS_STORAGE: embassy_nats::Storage = embassy_nats::Storage::new();
 const NATS_ADDR: &str = "nats.local";
+const NATS_USER: &str = "nats";
+const NATS_PWD: &str = "south";
 
 static TC_CH: embassy_nats::MsgChannel = embassy_nats::MsgChannel::new();
 
@@ -284,7 +286,7 @@ async fn main(spawner: Spawner) {
 
     // nats connection
     let (client, runner) =
-        embassy_nats::new_with_user_pwd("nats", "nats", socket_addr, socket, &NATS_STORAGE);
+        embassy_nats::new_with_user_pwd(NATS_USER, NATS_PWD, socket_addr, socket, &NATS_STORAGE);
 
     // nats tc subscription
     let mut tc_client = client.clone();
