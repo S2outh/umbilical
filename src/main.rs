@@ -81,7 +81,7 @@ static TCP_TX_BUF: StaticCell<[u8; TCP_TX_BUF_SIZE]> = StaticCell::new();
 
 // NATS
 static NATS_STORAGE: embassy_nats::Storage = embassy_nats::Storage::new();
-const NATS_ADDR: &str = "nats.tichygames.de";
+const NATS_ADDR: &str = "nats.local";
 
 static TC_CH: embassy_nats::MsgChannel = embassy_nats::MsgChannel::new();
 
@@ -155,24 +155,19 @@ async fn nats_task(mut runner: embassy_nats::Runner<'static, UserPwdAuthenticato
 }
 
 #[embassy_executor::task]
-pub async fn can_receiver_task(mut can_receiver: UmbilicalCanReceiver) -> ! {
+async fn can_receiver_task(mut can_receiver: UmbilicalCanReceiver) -> ! {
     can_receiver.run().await
 }
 
 #[embassy_executor::task]
-pub async fn can_sender_task(mut can_sender: UmbilicalCanSender) -> ! {
+async fn can_sender_task(mut can_sender: UmbilicalCanSender) -> ! {
     can_sender.run().await
 }
 
-pub async fn parse_or_resolve(
+async fn resolve_nats_addr(
     stack: &Stack<'_>,
-    s: &str,
 ) -> Result<SocketAddr, embassy_net::dns::Error> {
-    if let Ok(sa) = s.parse::<SocketAddr>() {
-        return Ok(sa);
-    }
-
-    let ips = stack.dns_query(s, DnsQueryType::A).await?;
+    let ips = stack.dns_query(NATS_ADDR, DnsQueryType::A).await?;
     let Some(ip) = ips.first() else {
         return Err(embassy_net::dns::Error::Failed);
     };
@@ -278,7 +273,7 @@ async fn main(spawner: Spawner) {
 
     // resolve addr
     let socket_addr = loop {
-        match parse_or_resolve(&stack, NATS_ADDR).await {
+        match resolve_nats_addr(&stack).await {
             Ok(addr) => break addr,
             Err(e) => {
                 warn!("could not resolve nats addr: {:?}, retrying...", e);
