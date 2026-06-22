@@ -1,6 +1,5 @@
 use core::task::Context;
 
-use defmt::info;
 use embassy_stm32::{eth::Phy, gpio::Output, spi::Spi};
 use embassy_time::{Duration, Instant};
 
@@ -123,7 +122,7 @@ impl<'a> Ksz8863Phy<'a> {
             let auto_negotiate = self.get_auto_negotiate(port);
             let force_speed_100 = self.get_force_speed_100(port);
             let force_duplex = self.get_force_duplex(port);
-            info!(
+            defmt::debug!(
                 "Port {} link={} an_done={} auto_negotiate={} force_speed_100={} force_duplex={}",
                 port, link, an_done, auto_negotiate, force_speed_100, force_duplex
             );

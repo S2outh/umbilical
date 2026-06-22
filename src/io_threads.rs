@@ -50,26 +50,27 @@ pub async fn telecommand_task(
     let can_sender = obdh_com_channels.get_tm_sender();
     loop {
         let nats_msg = nats_client.receive().await;
-        if let Ok(cmd) = minicbor_serde::from_slice::<Telecommand>(&nats_msg.data) {
-            tc_counter += 1;
-            defmt::info!("Cmd: {}", nats_msg.data);
-            let container = UmbilicalChellUnion::new(&internal_msgs::Telecommand, &cmd).unwrap();
-            can_sender.send(container).await;
+        match minicbor_serde::from_slice::<Telecommand>(&nats_msg.data) {
+            Ok(cmd) => {
+                tc_counter += 1;
+                defmt::info!("Cmd: {}", nats_msg.data);
+                let container = UmbilicalChellUnion::new(&internal_msgs::Telecommand, &cmd).unwrap();
+                can_sender.send(container).await;
 
-            if let Ok(values) = tc_counter.serialize_ground(
-                &tc_counter_def,
-                &obdh_com_channels.get_utc_us(),
-                &cbor_serializer
-            ) {
-                for serialized_value in values {
-                    nats_client.publish(
-                        String::from(serialized_value.0),
-                        serialized_value.1
-                    ).await;
+                if let Ok(values) = tc_counter.serialize_ground(
+                    &tc_counter_def,
+                    &obdh_com_channels.get_utc_us(),
+                    &cbor_serializer
+                ) {
+                    for serialized_value in values {
+                        nats_client.publish(
+                            String::from(serialized_value.0),
+                            serialized_value.1
+                        ).await;
+                    }
                 }
-            }
-        } else {
-            defmt::warn!("could not decode cmd");
+            },
+            Err(e) => defmt::warn!("could not decode cmd: {}", defmt::Debug2Format(&e)),
         }
     }
 }

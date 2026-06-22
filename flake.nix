@@ -56,7 +56,7 @@
           # set the rust src for rust_analyzer
           RUST_SRC_PATH = "${rust-toolchain}/lib/rustlib/src/rust/library";
 					# set default defmt log level
-					DEFMT_LOG = "debug";
+					DEFMT_LOG = "info";
         };
       }
     );

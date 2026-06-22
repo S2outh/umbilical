@@ -29,7 +29,7 @@ cortex-m-rt = "0.7.5"
 static_cell = { version = "2.1.1", features = ["nightly"] }
 embedded-can = "0.4.1"
 
-south-common = { git = "https://github.com/S2outh/south-common.git", features = ["ground", "h7"] }
+south-common = { git = "https://github.com/S2outh/south-common.git", features = ["ground", "h7", "timesync"] }
 
 erased-serde = { version = "0.4.10", default-features = false, features = ["alloc"] }
 serde = { version = "1.0.228", default-features = false, features = ["alloc", "derive"] }

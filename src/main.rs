@@ -6,7 +6,6 @@
 extern crate alloc;
 
 mod io_threads;
-mod timesync;
 mod ksz8863_phy_drv;
 mod ground_tm_defs;
 mod dts_drv;
@@ -14,6 +13,7 @@ mod dts_drv;
 use {defmt_rtt as _, panic_probe as _};
 
 use defmt::{info, warn};
+use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embedded_alloc::LlffHeap as Heap;
 use embassy_executor::Spawner;
 use embassy_nats::UserPwdAuthenticator;
@@ -38,6 +38,7 @@ use south_common::chell::ChellDefinition;
 use south_common::configs::can_config::CanPeriphConfig;
 use south_common::definitions::{internal_msgs, telemetry as tm};
 use south_common::gen_obdh_types;
+use south_common::timesync::NTPTimeSource;
 use static_cell::StaticCell;
 use core::net::SocketAddr;
 
@@ -52,7 +53,15 @@ type EthDriver = Ethernet<'static, peripherals::ETH, EthPhy>;
 const WATCHDOG_TIMEOUT_US: u32 = 300_000;
 const WATCHDOG_PETTING_INTERVAL_US: u32 = WATCHDOG_TIMEOUT_US / 2;
 
+// Ntp
 const NTP_TIME_SRC_UPDATE_PRIO: u8 = 10;
+const NTP_ADDR: &str = "ntp.local";
+const NTP_PORT: u16 = 123;
+
+static RX_META: StaticCell<[PacketMetadata; 1]> = StaticCell::new();
+static RX_BUF: StaticCell<[u8; 64]> = StaticCell::new();
+static TX_META: StaticCell<[PacketMetadata; 1]> = StaticCell::new();
+static TX_BUF: StaticCell<[u8; 64]> = StaticCell::new();
 
 // Obdh types
 gen_obdh_types!(Umbilical, internal_msgs, on_tm => io_threads::Reserialize);
@@ -82,6 +91,7 @@ static TCP_TX_BUF: StaticCell<[u8; TCP_TX_BUF_SIZE]> = StaticCell::new();
 // NATS
 static NATS_STORAGE: embassy_nats::Storage = embassy_nats::Storage::new();
 const NATS_ADDR: &str = "nats.local";
+const NATS_PORT: u16 = 4222;
 const NATS_USER: &str = "nats";
 const NATS_PWD: &str = "south";
 
@@ -137,6 +147,10 @@ fn get_rcc_config() -> rcc::Config {
     rcc_config
 }
 
+fn time_setter_fn(time: u64) {
+    COM_CHANNELS.set_utc_us(time, NTP_TIME_SRC_UPDATE_PRIO);
+}
+
 /// Watchdog petting task
 #[embassy_executor::task]
 async fn petter(mut watchdog: IndependentWatchdog<'static, IWDG1>) {
@@ -157,6 +171,11 @@ async fn nats_task(mut runner: embassy_nats::Runner<'static, UserPwdAuthenticato
 }
 
 #[embassy_executor::task]
+async fn ntp_task(mut runner: NTPTimeSource<'static, 'static>) -> ! {
+    runner.run().await
+}
+
+#[embassy_executor::task]
 async fn can_receiver_task(mut can_receiver: UmbilicalCanReceiver) -> ! {
     can_receiver.run().await
 }
@@ -166,14 +185,16 @@ async fn can_sender_task(mut can_sender: UmbilicalCanSender) -> ! {
     can_sender.run().await
 }
 
-async fn resolve_nats_addr(
+async fn resolve_addr(
     stack: &Stack<'_>,
+    addr: &str,
+    port: u16,
 ) -> Result<SocketAddr, embassy_net::dns::Error> {
-    let ips = stack.dns_query(NATS_ADDR, DnsQueryType::A).await?;
+    let ips = stack.dns_query(addr, DnsQueryType::A).await?;
     let Some(ip) = ips.first() else {
         return Err(embassy_net::dns::Error::Failed);
     };
-    Ok(SocketAddr::new((*ip).into(), 4222))
+    Ok(SocketAddr::new((*ip).into(), port))
 }
 
 #[embassy_executor::main]
@@ -266,16 +287,36 @@ async fn main(spawner: Spawner) {
 
     info!("Network initialized");
 
-    // get unix time over ntp
-    let unix_us = timesync::sync_internet_time(&stack).await;
-    COM_CHANNELS.set_utc_us(unix_us, NTP_TIME_SRC_UPDATE_PRIO);
+    // initialize unix time query over ntp
+    let ntp_socket = UdpSocket::new(stack,
+        RX_META.init([PacketMetadata::EMPTY]),
+        RX_BUF.init([0; _]),
+        TX_META.init([PacketMetadata::EMPTY]),
+        TX_BUF.init([0; _]),
+    );
+    
+    // resolve ntp addr
+    let socket_addr = loop {
+        match resolve_addr(&stack, NTP_ADDR, NTP_PORT).await {
+            Ok(addr) => break addr,
+            Err(e) => {
+                warn!("could not resolve nats addr: {:?}, retrying...", e);
+                Timer::after_secs(2).await;
+            }
+        }
+    };
+
+    let time_source_runner = NTPTimeSource::new(ntp_socket, socket_addr, &time_setter_fn)
+        .expect("could not create NTP time source");
+
+    spawner.spawn(ntp_task(time_source_runner).unwrap());
 
     // Initizlize Nats socket
     let socket = TcpSocket::new(stack, TCP_RX_BUF.init([0; _]), TCP_TX_BUF.init([0; _]));
 
-    // resolve addr
+    // resolve nats addr
     let socket_addr = loop {
-        match resolve_nats_addr(&stack).await {
+        match resolve_addr(&stack, NATS_ADDR, NATS_PORT).await {
             Ok(addr) => break addr,
             Err(e) => {
                 warn!("could not resolve nats addr: {:?}, retrying...", e);
