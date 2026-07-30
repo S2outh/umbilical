@@ -46,7 +46,6 @@ pub async fn telecommand_task(
     mut nats_client: embassy_nats::Client<'static>
 ) {
     let mut tc_counter = 0u32;
-    let tc_counter_def = groundstation::umbilical::TelecommandCounter;
     let can_sender = obdh_com_channels.get_tm_sender();
     loop {
         let nats_msg = nats_client.receive().await;
@@ -58,7 +57,7 @@ pub async fn telecommand_task(
                 can_sender.send(container).await;
 
                 if let Ok(values) = tc_counter.serialize_ground(
-                    &tc_counter_def,
+                    groundstation::umbilical::TelecommandCounter,
                     &obdh_com_channels.get_utc_us(),
                     &cbor_serializer
                 ) {
@@ -84,12 +83,11 @@ pub async fn dts_task(
 ) {
     const DTS_LOOP_LEN: Duration = Duration::from_millis(1000);
     let mut ticker = Ticker::every(DTS_LOOP_LEN);
-    let temp_def = groundstation::umbilical::InternalTemperature;
     loop {
         let temp = dts.read().await;
 
         if let Ok(values) = temp.serialize_ground(
-            &temp_def,
+            groundstation::umbilical::InternalTemperature,
             &obdh_com_channels.get_utc_us(),
             &cbor_serializer
         ) {
