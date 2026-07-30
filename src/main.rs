@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![feature(impl_trait_in_assoc_type)] // required by `embassy_executor::task` with the `nightly` feature
 #![feature(const_cmp)]
 #![feature(const_trait_impl)]
 
