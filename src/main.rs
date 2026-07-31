@@ -37,7 +37,7 @@ use embassy_stm32::{Config, bind_interrupts};
 use embassy_time::{Duration, Timer};
 use south_common::chell::ChellDefinition;
 use south_common::configs::can_config::CanPeriphConfig;
-use south_common::definitions::{internal_msgs, telemetry as tm};
+use south_common::definitions::{command_msgs, telemetry as tm};
 use south_common::gen_obdh_types;
 use south_common::timesync::NTPTimeSource;
 use static_cell::StaticCell;
@@ -65,7 +65,7 @@ static TX_META: StaticCell<[PacketMetadata; 1]> = StaticCell::new();
 static TX_BUF: StaticCell<[u8; 64]> = StaticCell::new();
 
 // Obdh types
-gen_obdh_types!(Umbilical, internal_msgs, on_tm => io_threads::Reserialize);
+gen_obdh_types!(Umbilical, command_msgs, on_tm => io_threads::Reserialize);
 
 // internal messaging channels
 static COM_CHANNELS: UmbilicalComChannels =
@@ -218,7 +218,7 @@ async fn main(spawner: Spawner) {
     
     // Launch detection pin
     let launch_detection = ExtiInput::new(p.PE15, p.EXTI15, Pull::Up, Irqs);
-    spawner.spawn(io_threads::launch_detection_task(COM_CHANNELS.get_tm_sender(), launch_detection).unwrap());
+    spawner.spawn(io_threads::launch_detection_task(&COM_CHANNELS, launch_detection).unwrap());
 
     // internal temperature sensor
     let mut dts_config = dts::Config::default();
@@ -334,7 +334,7 @@ async fn main(spawner: Spawner) {
     // nats tc subscription
     let mut tc_client = client.clone();
     tc_client.subscribe(
-        alloc::string::String::from(internal_msgs::Telecommand.address()),
+        alloc::string::String::from(command_msgs::Telecommand.address()),
         &TC_CH
     ).await;
 

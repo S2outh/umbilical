@@ -1,9 +1,9 @@
 use alloc::string::String;
 use embassy_stm32::{can::frame::FdEnvelope, exti::ExtiInput, mode::Async};
 use embassy_time::{Duration, Ticker};
-use south_common::{chell::{ChellDefinition, ground::SerializableChellValue}, definitions::internal_msgs, obdh::OnTMFunc, types::Telecommand};
+use south_common::{chell::{ChellDefinition, ground::SerializableChellValue}, definitions::command_msgs, obdh::OnTMFunc, types::Telecommand};
 
-use crate::{UmbilicalChellUnion, UmbilicalComChannels, UmbilicalTMSender, dts_drv::DtsDrv, ground_tm_defs::groundstation};
+use crate::{UmbilicalChellUnion, UmbilicalComChannels, dts_drv::DtsDrv, ground_tm_defs::groundstation};
 
 fn cbor_serializer(
     value: &dyn erased_serde::Serialize,
@@ -42,23 +42,22 @@ impl OnTMFunc for Reserialize {
 
 #[embassy_executor::task]
 pub async fn telecommand_task(
-    obdh_com_channels: &'static UmbilicalComChannels,
+    com_channels: &'static UmbilicalComChannels,
     mut nats_client: embassy_nats::Client<'static>
 ) {
     let mut tc_counter = 0u32;
-    let can_sender = obdh_com_channels.get_tm_sender();
     loop {
         let nats_msg = nats_client.receive().await;
         match minicbor_serde::from_slice::<Telecommand>(&nats_msg.data) {
             Ok(cmd) => {
                 tc_counter += 1;
                 defmt::info!("Cmd: {}", nats_msg.data);
-                let container = UmbilicalChellUnion::new(&internal_msgs::Telecommand, &cmd).unwrap();
-                can_sender.send(container).await;
+                let container = UmbilicalChellUnion::new(&command_msgs::Telecommand, &cmd).unwrap();
+                com_channels.send_tm(container).await;
 
                 if let Ok(values) = tc_counter.serialize_ground(
                     groundstation::umbilical::TelecommandCounter,
-                    &obdh_com_channels.get_utc_us(),
+                    &com_channels.get_utc_us(),
                     &cbor_serializer
                 ) {
                     for serialized_value in values {
@@ -77,7 +76,7 @@ pub async fn telecommand_task(
 // internal temperature
 #[embassy_executor::task]
 pub async fn dts_task(
-    obdh_com_channels: &'static UmbilicalComChannels,
+    com_channels: &'static UmbilicalComChannels,
     mut nats_client: embassy_nats::Client<'static>,
     mut dts: DtsDrv<'static>
 ) {
@@ -88,7 +87,7 @@ pub async fn dts_task(
 
         if let Ok(values) = temp.serialize_ground(
             groundstation::umbilical::InternalTemperature,
-            &obdh_com_channels.get_utc_us(),
+            &com_channels.get_utc_us(),
             &cbor_serializer
         ) {
             for serialized_value in values {
@@ -105,11 +104,11 @@ pub async fn dts_task(
 
 // Launch detection
 #[embassy_executor::task]
-pub async fn launch_detection_task(msg_channel: UmbilicalTMSender, mut launch_detection: ExtiInput<'static, Async>) {
+pub async fn launch_detection_task(com_channels: &'static UmbilicalComChannels, mut launch_detection: ExtiInput<'static, Async>) {
     loop {
         launch_detection.wait_for_rising_edge().await;
-        let container = UmbilicalChellUnion::new(&internal_msgs::LaunchDetected, &()).unwrap();
-        msg_channel.send(container).await;
+        let container = UmbilicalChellUnion::new(&command_msgs::LaunchDetected, &()).unwrap();
+        com_channels.send_tm(container).await;
     }
 
 }
