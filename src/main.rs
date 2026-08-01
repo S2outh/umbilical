@@ -133,18 +133,20 @@ fn get_rcc_config() -> rcc::Config {
         prediv: rcc::PllPreDiv::DIV4,  // 16 MHz
         mul: rcc::PllMul::MUL30,       // 480 MHz
         divp: Some(rcc::PllDiv::DIV2), // 240 MHz
-        divq: Some(rcc::PllDiv::DIV4), // 120 MHz
+        divq: Some(rcc::PllDiv::DIV8), // 60 MHz
         divr: Some(rcc::PllDiv::DIV8), // 60 MHz
     });
     rcc_config.sys = rcc::Sysclk::PLL1_P; // cpu runns with 240 MHz
-    rcc_config.mux.fdcansel = rcc::mux::Fdcansel::PLL1_Q; // can runns with 120 MHz
+    // fdcan_tq_ck (60 MHz) must stay <= fdcan_pclk, i.e. apb1 (60 MHz)
+    rcc_config.mux.fdcansel = rcc::mux::Fdcansel::PLL1_Q; // can runns with 60 MHz
+
     rcc_config.voltage_scale = rcc::VoltageScale::Scale2; // voltage scale for max 300 MHz Pll out
 
-    rcc_config.ahb_pre = rcc::AHBPrescaler::DIV2;  // AHB runns at 120 MHz
-    rcc_config.apb1_pre = rcc::APBPrescaler::DIV4; // APB 1-4 all run with 60 MHz
-    rcc_config.apb2_pre = rcc::APBPrescaler::DIV4;
-    rcc_config.apb3_pre = rcc::APBPrescaler::DIV4;
-    rcc_config.apb4_pre = rcc::APBPrescaler::DIV4;
+    rcc_config.ahb_pre = rcc::AHBPrescaler::DIV2;  // AHB runns at 120 MHz (src: sysclk)
+    rcc_config.apb1_pre = rcc::APBPrescaler::DIV2; // APB 1-4 all run with 60 MHz (src: ahb)
+    rcc_config.apb2_pre = rcc::APBPrescaler::DIV2;
+    rcc_config.apb3_pre = rcc::APBPrescaler::DIV2;
+    rcc_config.apb4_pre = rcc::APBPrescaler::DIV2;
 
     rcc_config
 }
