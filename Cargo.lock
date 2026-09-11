@@ -73,9 +73,9 @@ checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
 name = "bitflags"
-version = "2.13.1"
+version = "2.13.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b588b76d00fde79687d7646a9b5bdf3cc0f655e0bbd080335a95d7e96f3587da"
+checksum = "3ded4057c258ba199e2d26386d3af3780957ecaee6c4ef4041c6b4b8b97c0b06"
 
 [[package]]
 name = "block-device-driver"
@@ -94,9 +94,9 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "cc"
-version = "1.4.4"
+version = "1.4.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ad534f4357a5264cce5019c989cf66a4f0dc4e0d1b1d15f8aacec0ff7360273"
+checksum = "005ec2760ca554fae18df7a11195552ec576cd665632a881bc011d5bb2fd4d80"
 dependencies = [
  "find-msvc-tools",
  "shlex",
@@ -110,8 +110,8 @@ checksum = "9330f8b2ff13f34540b44e946ef35111825727b38d33286ef986142615121801"
 
 [[package]]
 name = "chell"
-version = "7.8.1"
-source = "git+https://github.com/S2outh/chell-sys.git#91c7baaf178eeb9f44563b3a0230cd08a71c4a9b"
+version = "7.8.2"
+source = "git+https://github.com/S2outh/chell-sys.git#60488a51e77a926bbc3d765f605dc75d93e63a85"
 dependencies = [
  "chell-macros",
  "erased-serde",
@@ -121,8 +121,8 @@ dependencies = [
 
 [[package]]
 name = "chell-macros"
-version = "7.8.1"
-source = "git+https://github.com/S2outh/chell-sys.git#91c7baaf178eeb9f44563b3a0230cd08a71c4a9b"
+version = "7.8.2"
+source = "git+https://github.com/S2outh/chell-sys.git#60488a51e77a926bbc3d765f605dc75d93e63a85"
 dependencies = [
  "heck",
  "proc-macro2",
@@ -381,19 +381,17 @@ dependencies = [
 [[package]]
 name = "embassy-nats"
 version = "0.1.0"
-source = "git+https://github.com/S2outh/embassy-nats.git#c33a688c3bb40bf6ade5deb4220511f0bfee1d68"
+source = "git+https://github.com/S2outh/embassy-nats.git#be1f5de99aa9abf6f7f54e17a3edafd024b123aa"
 dependencies = [
- "cortex-m",
- "cortex-m-rt",
  "defmt 1.1.1",
- "defmt-rtt",
  "embassy-futures",
  "embassy-net",
  "embassy-sync",
  "embedded-io-async 0.7.0",
- "panic-probe",
+ "heapless 0.9.3",
  "serde",
- "serde_json",
+ "serde-json-core",
+ "thiserror",
 ]
 
 [[package]]
@@ -409,7 +407,7 @@ dependencies = [
  "embassy-time",
  "embedded-io-async 0.7.0",
  "embedded-nal-async",
- "heapless",
+ "heapless 0.9.3",
  "managed",
  "smoltcp",
 ]
@@ -431,7 +429,7 @@ checksum = "486c0622deb5a519fc4d2cb8e3ef324f7568fcdfff201ff8fcab46557d663ceb"
 dependencies = [
  "aligned",
  "bit_field",
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "block-device-driver",
  "cfg-if",
  "cortex-m",
@@ -459,7 +457,7 @@ dependencies = [
  "embedded-storage",
  "embedded-storage-async",
  "futures-util",
- "heapless",
+ "heapless 0.9.3",
  "nb 1.1.0",
  "proc-macro2",
  "quote",
@@ -487,7 +485,7 @@ dependencies = [
  "embedded-io-async 0.7.0",
  "futures-core",
  "futures-sink",
- "heapless",
+ "heapless 0.9.3",
 ]
 
 [[package]]
@@ -523,7 +521,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "168297bf80aaf114b3c9ad589bf38b01b3009b9af7f97cd18086c5bbf96f5693"
 dependencies = [
  "embassy-executor-timer-queue",
- "heapless",
+ "heapless 0.9.3",
 ]
 
 [[package]]
@@ -686,9 +684,9 @@ dependencies = [
 
 [[package]]
 name = "find-msvc-tools"
-version = "0.1.11"
+version = "0.1.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
+checksum = "3e0f1c7c3a72c66fd80abe965175f7523475c0489a87d3ff9d6e8c87d87a9d2d"
 
 [[package]]
 name = "fnv"
@@ -751,12 +749,25 @@ dependencies = [
 
 [[package]]
 name = "heapless"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bfb9eb618601c89945a70e254898da93b13be0388091d42117462b265bb3fad"
+dependencies = [
+ "defmt 0.3.100",
+ "hash32",
+ "serde",
+ "stable_deref_trait",
+]
+
+[[package]]
+name = "heapless"
 version = "0.9.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "25ba4bd83f9415b58b4ed8dc5714c76e626a105be4646c02630ad730ad3b5aa4"
 dependencies = [
  "defmt 1.1.1",
  "hash32",
+ "serde_core",
  "stable_deref_trait",
 ]
 
@@ -1072,6 +1083,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf54715a573b99ac80df0bc206da022bcd442c974952c7b9720069370852e21f"
 
 [[package]]
+name = "ryu"
+version = "1.0.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
+
+[[package]]
 name = "scoped-tls"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1109,6 +1126,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "serde-json-core"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "5b81787e655bd59cecadc91f7b6b8651330b2be6c33246039a65e5cd6f4e0828"
+dependencies = [
+ "defmt 0.3.100",
+ "heapless 0.8.0",
+ "ryu",
+ "serde",
+]
+
+[[package]]
 name = "serde_core"
 version = "1.0.229"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1125,7 +1154,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]
@@ -1169,9 +1198,9 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "1.15.2"
+version = "1.16.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ed6a63f02c8539c91a8685a86f4099661ba3da017932f6ebbea6de3f0fa7c90"
+checksum = "ba467056f1b547ed52077911161fc86985becbc60e8e1857c8a144dab0def891"
 
 [[package]]
 name = "smoltcp"
@@ -1183,7 +1212,7 @@ dependencies = [
  "byteorder",
  "cfg-if",
  "defmt 0.3.100",
- "heapless",
+ "heapless 0.9.3",
  "managed",
 ]
 
@@ -1223,9 +1252,9 @@ dependencies = [
 [[package]]
 name = "south-common"
 version = "4.0.0"
-source = "git+https://github.com/S2outh/south-common.git#5e6a3c6f79647cbbd635c002cd85d165f926d686"
+source = "git+https://github.com/S2outh/south-common.git#dd4d14aa0277d80bae227ad713ef8a68baf417fd"
 dependencies = [
- "bitflags 2.13.1",
+ "bitflags 2.13.2",
  "chell",
  "defmt 1.1.1",
  "embassy-executor",
@@ -1236,7 +1265,7 @@ dependencies = [
  "embassy-time",
  "embedded-can",
  "erased-serde",
- "heapless",
+ "heapless 0.9.3",
  "libm",
  "lsm6dsv32",
  "nalgebra",
@@ -1331,9 +1360,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.4"
+version = "3.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6275cddf4610d1775e6d1fe9469b2e77d0f39fd98fb7450901b821e0c53649f"
+checksum = "12df2e0110f65b775f769bb17ef989067a1d931b2eb822bd4346631eeada89f9"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1357,7 +1386,7 @@ checksum = "bc04cd3e1236dd4a98afca4569f2deb3f120e5422a4023be2cb683f8486292af"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.4",
+ "syn 3.0.5",
 ]
 
 [[package]]

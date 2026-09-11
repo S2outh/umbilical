@@ -36,7 +36,7 @@
       in {
         devShells.default =
         pkgs.mkShell {
-          buildInputs = with pkgs; [
+          nativeBuildInputs = with pkgs; [
             rust-toolchain
             rust-analyzer-nightly
 

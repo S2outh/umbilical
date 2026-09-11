@@ -91,13 +91,15 @@ const TCP_TX_BUF_SIZE: usize = 1024;
 static TCP_TX_BUF: StaticCell<[u8; TCP_TX_BUF_SIZE]> = StaticCell::new();
 
 // NATS
-static NATS_STORAGE: embassy_nats::Storage = embassy_nats::Storage::new();
+type NatsConf = embassy_nats::Alloc;
+const NATS_NUM_SUBS: usize = 1;
+static NATS_STORAGE: StaticCell<embassy_nats::Storage<NatsConf>> = StaticCell::new();
 const NATS_ADDR: &str = "nats.lan";
 const NATS_PORT: u16 = 4222;
 const NATS_USER: &str = "nats";
 const NATS_PWD: &str = "south";
 
-static TC_CH: embassy_nats::MsgChannel = embassy_nats::MsgChannel::new();
+static TC_CH: embassy_nats::MsgChannel<NatsConf, NATS_NUM_SUBS> = embassy_nats::MsgChannel::new();
 
 // Static can buffer
 const C_RX_BUF_SIZE: usize = 1024;
@@ -170,7 +172,7 @@ async fn net_task(mut runner: Runner<'static, EthDriver>) -> ! {
 }
 
 #[embassy_executor::task]
-async fn nats_task(mut runner: embassy_nats::Runner<'static, UserPwdAuthenticator>) -> ! {
+async fn nats_task(mut runner: embassy_nats::Runner<'static, NatsConf, UserPwdAuthenticator, NATS_NUM_SUBS>) -> ! {
     runner.run().await
 }
 
@@ -330,15 +332,16 @@ async fn main(spawner: Spawner) {
     };
 
     // nats connection
+    let nats_storage = NATS_STORAGE.init(embassy_nats::Storage::new());
     let (client, runner) =
-        embassy_nats::new_with_user_pwd(NATS_USER, NATS_PWD, socket_addr, socket, &NATS_STORAGE);
+        embassy_nats::new_with_user_pwd(NATS_USER, NATS_PWD, socket_addr, socket, nats_storage).unwrap();
 
     // nats tc subscription
     let mut tc_client = client.clone();
     tc_client.subscribe(
         alloc::string::String::from(command_msgs::Telecommand.address()),
         &TC_CH
-    ).await;
+    ).await.unwrap();
 
     spawner.spawn(nats_task(runner).unwrap());
 

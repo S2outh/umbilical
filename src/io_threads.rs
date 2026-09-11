@@ -3,7 +3,7 @@ use embassy_stm32::{can::frame::FdEnvelope, exti::ExtiInput, mode::Async};
 use embassy_time::{Duration, Ticker};
 use south_common::{chell::{ChellDefinition, ground::SerializableChellValue}, definitions::command_msgs, obdh::OnTMFunc, types::Telecommand};
 
-use crate::{UmbilicalChellUnion, UmbilicalComChannels, dts_drv::DtsDrv, ground_tm_defs::groundstation};
+use crate::{NatsConf, NATS_NUM_SUBS, UmbilicalChellUnion, UmbilicalComChannels, dts_drv::DtsDrv, ground_tm_defs::groundstation};
 
 fn cbor_serializer(
     value: &dyn erased_serde::Serialize,
@@ -16,12 +16,12 @@ fn cbor_serializer(
 
 pub struct Reserialize {
     obdh_com_channels: &'static UmbilicalComChannels,
-    nats_client: embassy_nats::Client<'static>,
+    nats_client: embassy_nats::Client<'static, NatsConf, NATS_NUM_SUBS>,
 }
 impl Reserialize {
     pub fn new(
         obdh_com_channels: &'static UmbilicalComChannels,
-        nats_client: embassy_nats::Client<'static>,
+        nats_client: embassy_nats::Client<'static, NatsConf, NATS_NUM_SUBS>,
     ) -> Self {
         Self { obdh_com_channels, nats_client }
     }
@@ -43,7 +43,7 @@ impl OnTMFunc for Reserialize {
 #[embassy_executor::task]
 pub async fn telecommand_task(
     com_channels: &'static UmbilicalComChannels,
-    mut nats_client: embassy_nats::Client<'static>
+    mut nats_client: embassy_nats::Client<'static, NatsConf, NATS_NUM_SUBS>
 ) {
     let mut tc_counter = 0u32;
     loop {
@@ -51,7 +51,6 @@ pub async fn telecommand_task(
         match minicbor_serde::from_slice::<Telecommand>(&nats_msg.data) {
             Ok(cmd) => {
                 tc_counter += 1;
-                defmt::info!("Cmd: {}", nats_msg.data);
                 let container = UmbilicalChellUnion::new(&command_msgs::Telecommand, &cmd).unwrap();
                 com_channels.send_tm(container).await;
 
@@ -77,7 +76,7 @@ pub async fn telecommand_task(
 #[embassy_executor::task]
 pub async fn dts_task(
     com_channels: &'static UmbilicalComChannels,
-    mut nats_client: embassy_nats::Client<'static>,
+    mut nats_client: embassy_nats::Client<'static, NatsConf, NATS_NUM_SUBS>,
     mut dts: DtsDrv<'static>
 ) {
     const DTS_LOOP_LEN: Duration = Duration::from_millis(1000);
