@@ -124,7 +124,12 @@ impl<'a> Ksz8863Phy<'a> {
             let force_duplex = self.get_force_duplex(port);
             defmt::debug!(
                 "Port {} link={} an_done={} auto_negotiate={} force_speed_100={} force_duplex={}",
-                port, link, an_done, auto_negotiate, force_speed_100, force_duplex
+                port,
+                link,
+                an_done,
+                auto_negotiate,
+                force_speed_100,
+                force_duplex
             );
 
             self.led_phy[port as usize].set_level(link.into());

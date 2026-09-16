@@ -1,9 +1,16 @@
 use alloc::string::String;
 use embassy_stm32::{can::frame::FdEnvelope, exti::ExtiInput, mode::Async};
 use embassy_time::{Duration, Ticker};
-use south_common::{chell::{ChellDefinition, ground::SerializableChellValue}, definitions::command_msgs, obdh::OnTMFunc, types::Telecommand};
+use south_common::{
+    chell::{ChellDefinition, ground::SerializableChellValue},
+    definitions::{command_msgs, groundstation},
+    obdh::OnTMFunc,
+    types::Telecommand,
+};
 
-use crate::{NatsConf, NATS_NUM_SUBS, UmbilicalChellUnion, UmbilicalComChannels, dts_drv::DtsDrv, ground_tm_defs::groundstation};
+use crate::{
+    NATS_NUM_SUBS, NatsCollections, UmbilicalChellUnion, UmbilicalComChannels, dts_drv::DtsDrv,
+};
 
 fn cbor_serializer(
     value: &dyn erased_serde::Serialize,
@@ -16,14 +23,17 @@ fn cbor_serializer(
 
 pub struct Reserialize {
     obdh_com_channels: &'static UmbilicalComChannels,
-    nats_client: embassy_nats::Client<'static, NatsConf, NATS_NUM_SUBS>,
+    nats_client: embassy_nats::Client<'static, NatsCollections, NATS_NUM_SUBS>,
 }
 impl Reserialize {
     pub fn new(
         obdh_com_channels: &'static UmbilicalComChannels,
-        nats_client: embassy_nats::Client<'static, NatsConf, NATS_NUM_SUBS>,
+        nats_client: embassy_nats::Client<'static, NatsCollections, NATS_NUM_SUBS>,
     ) -> Self {
-        Self { obdh_com_channels, nats_client }
+        Self {
+            obdh_com_channels,
+            nats_client,
+        }
     }
 }
 impl OnTMFunc for Reserialize {
@@ -34,7 +44,9 @@ impl OnTMFunc for Reserialize {
             &cbor_serializer,
         ) {
             for serialized_value in values {
-                self.nats_client.publish(serialized_value.0.into(), serialized_value.1).await;
+                self.nats_client
+                    .publish(serialized_value.0.into(), serialized_value.1)
+                    .await;
             }
         }
     }
@@ -43,7 +55,7 @@ impl OnTMFunc for Reserialize {
 #[embassy_executor::task]
 pub async fn telecommand_task(
     com_channels: &'static UmbilicalComChannels,
-    mut nats_client: embassy_nats::Client<'static, NatsConf, NATS_NUM_SUBS>
+    mut nats_client: embassy_nats::Client<'static, NatsCollections, NATS_NUM_SUBS>,
 ) {
     let mut tc_counter = 0u32;
     loop {
@@ -57,16 +69,15 @@ pub async fn telecommand_task(
                 if let Ok(values) = tc_counter.serialize_ground(
                     groundstation::umbilical::TelecommandCounter,
                     &com_channels.get_utc_us(),
-                    &cbor_serializer
+                    &cbor_serializer,
                 ) {
                     for serialized_value in values {
-                        nats_client.publish(
-                            String::from(serialized_value.0),
-                            serialized_value.1
-                        ).await;
+                        nats_client
+                            .publish(String::from(serialized_value.0), serialized_value.1)
+                            .await;
                     }
                 }
-            },
+            }
             Err(e) => defmt::warn!("could not decode cmd: {}", defmt::Debug2Format(&e)),
         }
     }
@@ -76,8 +87,8 @@ pub async fn telecommand_task(
 #[embassy_executor::task]
 pub async fn dts_task(
     com_channels: &'static UmbilicalComChannels,
-    mut nats_client: embassy_nats::Client<'static, NatsConf, NATS_NUM_SUBS>,
-    mut dts: DtsDrv<'static>
+    mut nats_client: embassy_nats::Client<'static, NatsCollections, NATS_NUM_SUBS>,
+    mut dts: DtsDrv<'static>,
 ) {
     const DTS_LOOP_LEN: Duration = Duration::from_millis(1000);
     let mut ticker = Ticker::every(DTS_LOOP_LEN);
@@ -87,13 +98,12 @@ pub async fn dts_task(
         if let Ok(values) = temp.serialize_ground(
             groundstation::umbilical::InternalTemperature,
             &com_channels.get_utc_us(),
-            &cbor_serializer
+            &cbor_serializer,
         ) {
             for serialized_value in values {
-                nats_client.publish(
-                    String::from(serialized_value.0),
-                    serialized_value.1
-                ).await;
+                nats_client
+                    .publish(String::from(serialized_value.0), serialized_value.1)
+                    .await;
             }
         }
 
@@ -103,11 +113,13 @@ pub async fn dts_task(
 
 // Launch detection
 #[embassy_executor::task]
-pub async fn launch_detection_task(com_channels: &'static UmbilicalComChannels, mut launch_detection: ExtiInput<'static, Async>) {
+pub async fn launch_detection_task(
+    com_channels: &'static UmbilicalComChannels,
+    mut launch_detection: ExtiInput<'static, Async>,
+) {
     loop {
         launch_detection.wait_for_rising_edge().await;
         let container = UmbilicalChellUnion::new(&command_msgs::LaunchDetected, &()).unwrap();
         com_channels.send_tm(container).await;
     }
-
 }

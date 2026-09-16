@@ -1,28 +1,26 @@
 #![no_std]
 #![no_main]
 #![feature(impl_trait_in_assoc_type)] // required by `embassy_executor::task` with the `nightly` feature
-#![feature(const_cmp)]
 #![feature(const_trait_impl)]
 
 extern crate alloc;
 
+mod dts_drv;
 mod io_threads;
 mod ksz8863_phy_drv;
-mod ground_tm_defs;
-mod dts_drv;
 
 use {defmt_rtt as _, panic_probe as _};
 
+use core::net::SocketAddr;
 use defmt::{info, warn};
-use embassy_net::udp::{PacketMetadata, UdpSocket};
-use embedded_alloc::LlffHeap as Heap;
 use embassy_executor::Spawner;
 use embassy_nats::UserPwdAuthenticator;
 use embassy_net::dns::DnsQueryType;
 use embassy_net::tcp::TcpSocket;
+use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_net::{Runner, Stack, StackResources};
-use embassy_stm32::dts::{self, Dts};
 use embassy_stm32::can::{self, CanConfigurator, RxFdBuf, TxFdBuf};
+use embassy_stm32::dts::{self, Dts};
 use embassy_stm32::eth::{Ethernet, PacketQueue};
 use embassy_stm32::exti::{self, ExtiInput};
 use embassy_stm32::gpio::{Level, Output, Pull, Speed};
@@ -35,13 +33,13 @@ use embassy_stm32::time::mhz;
 use embassy_stm32::wdg::IndependentWatchdog;
 use embassy_stm32::{Config, bind_interrupts};
 use embassy_time::{Duration, Timer};
+use embedded_alloc::LlffHeap as Heap;
 use south_common::chell::ChellDefinition;
 use south_common::configs::can_config::CanPeriphConfig;
 use south_common::definitions::{command_msgs, telemetry as tm};
 use south_common::gen_obdh_types;
 use south_common::timesync::NTPTimeSource;
 use static_cell::StaticCell;
-use core::net::SocketAddr;
 
 use crate::dts_drv::DtsDrv;
 use crate::io_threads::Reserialize;
@@ -68,8 +66,7 @@ static TX_BUF: StaticCell<[u8; 64]> = StaticCell::new();
 gen_obdh_types!(Umbilical, command_msgs, on_tm => io_threads::Reserialize);
 
 // internal messaging channels
-static COM_CHANNELS: UmbilicalComChannels =
-    UmbilicalComChannels::new(2);
+static COM_CHANNELS: UmbilicalComChannels = UmbilicalComChannels::new(2);
 
 // Heap setup
 const HEAP_KB: usize = 64;
@@ -84,29 +81,28 @@ static PACKET_QUEUE: StaticCell<PacketQueue<4, 4>> = StaticCell::new();
 static RESOURCES: StaticCell<StackResources<4>> = StaticCell::new();
 
 // buffer sizes for tcp data before and after processing
-const TCP_RX_BUF_SIZE: usize = 1024;
-static TCP_RX_BUF: StaticCell<[u8; TCP_RX_BUF_SIZE]> = StaticCell::new();
-
-const TCP_TX_BUF_SIZE: usize = 1024;
-static TCP_TX_BUF: StaticCell<[u8; TCP_TX_BUF_SIZE]> = StaticCell::new();
+static TCP_RX_BUF: StaticCell<[u8; 512]> = StaticCell::new();
+static TCP_TX_BUF: StaticCell<[u8; 512]> = StaticCell::new();
 
 // NATS
-type NatsConf = embassy_nats::Alloc;
-const NATS_NUM_SUBS: usize = 1;
-static NATS_STORAGE: embassy_nats::Storage<NatsConf> = embassy_nats::Storage::new();
+type NatsCollections = embassy_nats::Alloc;
+static NATS_STORAGE: embassy_nats::Storage<NatsCollections> = embassy_nats::Storage::new();
 const NATS_ADDR: &str = "nats.lan";
 const NATS_PORT: u16 = 4222;
 const NATS_USER: &str = "nats";
 const NATS_PWD: &str = "south";
+const NATS_NUM_SUBS: usize = 1;
 
-static TC_CH: embassy_nats::MsgChannel<NatsConf, NATS_NUM_SUBS> = embassy_nats::MsgChannel::new();
+const NATS_MSG_CHANNEL_SIZE: usize = 10;
+static TC_CH: embassy_nats::MsgChannel<NatsCollections, NATS_MSG_CHANNEL_SIZE> =
+    embassy_nats::MsgChannel::new();
 
 // Static can buffer
 const C_RX_BUF_SIZE: usize = 1024;
 const C_TX_BUF_SIZE: usize = 32;
 
-static C_RX_BUF: StaticCell<RxFdBuf<C_RX_BUF_SIZE>> = StaticCell::new();
-static C_TX_BUF: StaticCell<TxFdBuf<C_TX_BUF_SIZE>> = StaticCell::new();
+static C_RX_BUF: StaticCell<RxFdBuf<1024>> = StaticCell::new();
+static C_TX_BUF: StaticCell<TxFdBuf<32>> = StaticCell::new();
 
 bind_interrupts!(struct Irqs {
     ETH => embassy_stm32::eth::InterruptHandler;
@@ -144,7 +140,7 @@ fn get_rcc_config() -> rcc::Config {
 
     rcc_config.voltage_scale = rcc::VoltageScale::Scale2; // voltage scale for max 300 MHz Pll out
 
-    rcc_config.ahb_pre = rcc::AHBPrescaler::DIV2;  // AHB runns at 120 MHz (src: sysclk)
+    rcc_config.ahb_pre = rcc::AHBPrescaler::DIV2; // AHB runns at 120 MHz (src: sysclk)
     rcc_config.apb1_pre = rcc::APBPrescaler::DIV2; // APB 1-4 all run with 60 MHz (src: ahb)
     rcc_config.apb2_pre = rcc::APBPrescaler::DIV2;
     rcc_config.apb3_pre = rcc::APBPrescaler::DIV2;
@@ -172,7 +168,9 @@ async fn net_task(mut runner: Runner<'static, EthDriver>) -> ! {
 }
 
 #[embassy_executor::task]
-async fn nats_task(mut runner: embassy_nats::Runner<'static, NatsConf, UserPwdAuthenticator, NATS_NUM_SUBS>) -> ! {
+async fn nats_task(
+    mut runner: embassy_nats::Runner<'static, NatsCollections, UserPwdAuthenticator, NATS_NUM_SUBS>,
+) -> ! {
     runner.run().await
 }
 
@@ -219,7 +217,7 @@ async fn main(spawner: Spawner) {
     // unleash independent watchdog
     let mut watchdog = IndependentWatchdog::new(p.IWDG1, WATCHDOG_TIMEOUT_US);
     watchdog.unleash();
-    
+
     // Launch detection pin
     let launch_detection = ExtiInput::new(p.PE15, p.EXTI15, Pull::Up, Irqs);
     spawner.spawn(io_threads::launch_detection_task(&COM_CHANNELS, launch_detection).unwrap());
@@ -294,13 +292,14 @@ async fn main(spawner: Spawner) {
     info!("Network initialized");
 
     // initialize unix time query over ntp
-    let ntp_socket = UdpSocket::new(stack,
+    let ntp_socket = UdpSocket::new(
+        stack,
         RX_META.init([PacketMetadata::EMPTY]),
         RX_BUF.init([0; _]),
         TX_META.init([PacketMetadata::EMPTY]),
         TX_BUF.init([0; _]),
     );
-    
+
     // resolve ntp addr
     let socket_addr = loop {
         match resolve_addr(&stack, NTP_ADDR, NTP_PORT).await {
@@ -333,14 +332,18 @@ async fn main(spawner: Spawner) {
 
     // nats connection
     let (client, runner) =
-        embassy_nats::new_with_user_pwd(NATS_USER, NATS_PWD, socket_addr, socket, &NATS_STORAGE).unwrap();
+        embassy_nats::new_with_user_pwd(NATS_USER, NATS_PWD, socket_addr, socket, &NATS_STORAGE)
+            .unwrap();
 
     // nats tc subscription
     let mut tc_client = client.clone();
-    tc_client.subscribe(
-        alloc::string::String::from(command_msgs::Telecommand.address()),
-        &TC_CH
-    ).await.unwrap();
+    tc_client
+        .subscribe(
+            alloc::string::String::from(command_msgs::Telecommand.address()),
+            &TC_CH,
+        )
+        .await
+        .unwrap();
 
     spawner.spawn(nats_task(runner).unwrap());
 
