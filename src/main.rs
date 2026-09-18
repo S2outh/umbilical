@@ -98,9 +98,6 @@ static TC_CH: embassy_nats::MsgChannel<NatsCollections, NATS_MSG_CHANNEL_SIZE> =
     embassy_nats::MsgChannel::new();
 
 // Static can buffer
-const C_RX_BUF_SIZE: usize = 1024;
-const C_TX_BUF_SIZE: usize = 32;
-
 static C_RX_BUF: StaticCell<RxFdBuf<1024>> = StaticCell::new();
 static C_TX_BUF: StaticCell<TxFdBuf<32>> = StaticCell::new();
 
@@ -360,8 +357,8 @@ async fn main(spawner: Spawner) {
         .unwrap();
 
     let can_instance = can_configurator.activate(
-        C_TX_BUF.init(TxFdBuf::<C_TX_BUF_SIZE>::new()),
-        C_RX_BUF.init(RxFdBuf::<C_RX_BUF_SIZE>::new()),
+        C_TX_BUF.init(TxFdBuf::new()),
+        C_RX_BUF.init(RxFdBuf::new()),
     );
 
     // Setup can sender and receiver runners
