@@ -38,7 +38,7 @@ use south_common::chell::ChellDefinition;
 use south_common::configs::can_config::CanPeriphConfig;
 use south_common::definitions::{command_msgs, telemetry as tm};
 use south_common::gen_obdh_types;
-use south_common::timesync::NTPTimeSource;
+use south_common_ground::timesync::NTPTimeSource;
 use static_cell::StaticCell;
 
 use crate::dts_drv::DtsDrv;
