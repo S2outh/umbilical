@@ -23,12 +23,12 @@ fn cbor_serializer(
 
 pub struct Reserialize {
     obdh_com_channels: &'static UmbilicalComChannels,
-    nats_client: embassy_nats::Client<'static, NatsCollections, NATS_NUM_SUBS>,
+    nats_client: embedded_nats::Client<'static, NatsCollections, NATS_NUM_SUBS>,
 }
 impl Reserialize {
     pub fn new(
         obdh_com_channels: &'static UmbilicalComChannels,
-        nats_client: embassy_nats::Client<'static, NatsCollections, NATS_NUM_SUBS>,
+        nats_client: embedded_nats::Client<'static, NatsCollections, NATS_NUM_SUBS>,
     ) -> Self {
         Self {
             obdh_com_channels,
@@ -55,7 +55,7 @@ impl OnTMFunc for Reserialize {
 #[embassy_executor::task]
 pub async fn telecommand_task(
     com_channels: &'static UmbilicalComChannels,
-    mut nats_client: embassy_nats::Client<'static, NatsCollections, NATS_NUM_SUBS>,
+    mut nats_client: embedded_nats::Client<'static, NatsCollections, NATS_NUM_SUBS>,
 ) {
     let mut tc_counter = 0u32;
     loop {
@@ -87,7 +87,7 @@ pub async fn telecommand_task(
 #[embassy_executor::task]
 pub async fn dts_task(
     com_channels: &'static UmbilicalComChannels,
-    mut nats_client: embassy_nats::Client<'static, NatsCollections, NATS_NUM_SUBS>,
+    mut nats_client: embedded_nats::Client<'static, NatsCollections, NATS_NUM_SUBS>,
     mut dts: DtsDrv<'static>,
 ) {
     const DTS_LOOP_LEN: Duration = Duration::from_millis(1000);

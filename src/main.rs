@@ -11,12 +11,14 @@ mod ksz8863_phy_drv;
 
 use {defmt_rtt as _, panic_probe as _};
 
+use embassy_net::tcp::client::{TcpClient, TcpClientState};
+use embassy_sync::blocking_mutex::raw::ThreadModeRawMutex;
+use embedded_nats::UserPwdAuthenticator;
+
 use core::net::SocketAddr;
 use defmt::{info, warn};
 use embassy_executor::Spawner;
-use embassy_nats::UserPwdAuthenticator;
 use embassy_net::dns::DnsQueryType;
-use embassy_net::tcp::TcpSocket;
 use embassy_net::udp::{PacketMetadata, UdpSocket};
 use embassy_net::{Runner, Stack, StackResources};
 use embassy_stm32::can::{self, CanConfigurator, RxFdBuf, TxFdBuf};
@@ -39,7 +41,7 @@ use south_common::configs::can_config::CanPeriphConfig;
 use south_common::definitions::{command_msgs, telemetry as tm};
 use south_common::gen_obdh_types;
 use south_common_ground::timesync::NTPTimeSource;
-use static_cell::StaticCell;
+use static_cell::{ConstStaticCell, StaticCell};
 
 use crate::dts_drv::DtsDrv;
 use crate::io_threads::Reserialize;
@@ -75,18 +77,22 @@ const HEAP_KB: usize = 64;
 static HEAP: Heap = Heap::empty();
 
 // queues for raw packets before and after processing
-static PACKET_QUEUE: StaticCell<PacketQueue<4, 4>> = StaticCell::new();
+static PACKET_QUEUE: ConstStaticCell<PacketQueue<4, 4>> = ConstStaticCell::new(PacketQueue::new());
 // resources to hold the sockets used by the net driver.
 // One for DHCP, one for DNS, one for the NTP UDP socket and one for the NATS TCP socket
-static RESOURCES: StaticCell<StackResources<4>> = StaticCell::new();
-
-// buffer sizes for tcp data before and after processing
-static TCP_RX_BUF: StaticCell<[u8; 512]> = StaticCell::new();
-static TCP_TX_BUF: StaticCell<[u8; 512]> = StaticCell::new();
+static RESOURCES: ConstStaticCell<StackResources<4>> = ConstStaticCell::new(StackResources::new());
 
 // NATS
-type NatsCollections = embassy_nats::Alloc;
-static NATS_STORAGE: embassy_nats::Storage<NatsCollections> = embassy_nats::Storage::new();
+const NATS_NUM_SOCKETS: usize = 1;
+const NATS_TCP_RX_BUF: usize = 256;
+const NATS_TCP_TX_BUF: usize = 256;
+static NATS_TCP_CLIENT_STATE: ConstStaticCell<
+    TcpClientState<NATS_NUM_SOCKETS, NATS_TCP_TX_BUF, NATS_TCP_RX_BUF>,
+> = ConstStaticCell::new(TcpClientState::new());
+type NatsClient = TcpClient<'static, NATS_NUM_SOCKETS, NATS_TCP_TX_BUF, NATS_TCP_RX_BUF>;
+
+type NatsCollections = embedded_nats::Alloc<ThreadModeRawMutex>;
+static NATS_STORAGE: embedded_nats::Storage<NatsCollections> = embedded_nats::Storage::new();
 const NATS_ADDR: &str = "nats.lan";
 const NATS_PORT: u16 = 4222;
 const NATS_USER: &str = "nats";
@@ -94,8 +100,8 @@ const NATS_PWD: &str = "south";
 const NATS_NUM_SUBS: usize = 1;
 
 const NATS_MSG_CHANNEL_SIZE: usize = 10;
-static TC_CH: embassy_nats::MsgChannel<NatsCollections, NATS_MSG_CHANNEL_SIZE> =
-    embassy_nats::MsgChannel::new();
+static TC_CH: embedded_nats::MsgChannel<NatsCollections, NATS_MSG_CHANNEL_SIZE> =
+    embedded_nats::MsgChannel::new();
 
 // Static can buffer
 static C_RX_BUF: StaticCell<RxFdBuf<1024>> = StaticCell::new();
@@ -166,7 +172,13 @@ async fn net_task(mut runner: Runner<'static, EthDriver>) -> ! {
 
 #[embassy_executor::task]
 async fn nats_task(
-    mut runner: embassy_nats::Runner<'static, NatsCollections, UserPwdAuthenticator, NATS_NUM_SUBS>,
+    mut runner: embedded_nats::Runner<
+        'static,
+        NatsClient,
+        NatsCollections,
+        UserPwdAuthenticator,
+        NATS_NUM_SUBS,
+    >,
 ) -> ! {
     runner.run().await
 }
@@ -260,7 +272,7 @@ async fn main(spawner: Spawner) {
 
     // Ethernet device setup
     let eth = Ethernet::new_with_phy(
-        PACKET_QUEUE.init(PacketQueue::new()),
+        PACKET_QUEUE.take(),
         p.ETH,
         Irqs,
         p.PA1,
@@ -276,8 +288,7 @@ async fn main(spawner: Spawner) {
 
     let net_cfg = embassy_net::Config::dhcpv4(Default::default());
 
-    let (stack, runner) =
-        embassy_net::new(eth, net_cfg, RESOURCES.init(StackResources::new()), seed);
+    let (stack, runner) = embassy_net::new(eth, net_cfg, RESOURCES.take(), seed);
     spawner.spawn(net_task(runner).unwrap());
 
     // Launch watchdog task
@@ -313,8 +324,8 @@ async fn main(spawner: Spawner) {
 
     spawner.spawn(ntp_task(time_source_runner).unwrap());
 
-    // Initizlize Nats socket
-    let socket = TcpSocket::new(stack, TCP_RX_BUF.init([0; _]), TCP_TX_BUF.init([0; _]));
+    // Initizlize Nats client
+    let tcp_client = TcpClient::new(stack, NATS_TCP_CLIENT_STATE.take());
 
     // resolve nats addr
     let socket_addr = loop {
@@ -328,9 +339,14 @@ async fn main(spawner: Spawner) {
     };
 
     // nats connection
-    let (client, runner) =
-        embassy_nats::new_with_user_pwd(NATS_USER, NATS_PWD, socket_addr, socket, &NATS_STORAGE)
-            .unwrap();
+    let (client, runner) = embedded_nats::new_with_user_pwd(
+        NATS_USER,
+        NATS_PWD,
+        socket_addr,
+        tcp_client,
+        &NATS_STORAGE,
+    )
+    .unwrap();
 
     // nats tc subscription
     let mut tc_client = client.clone();
@@ -356,10 +372,8 @@ async fn main(spawner: Spawner) {
         .add_receive_topic_range(tm::id_range())
         .unwrap();
 
-    let can_instance = can_configurator.activate(
-        C_TX_BUF.init(TxFdBuf::new()),
-        C_RX_BUF.init(RxFdBuf::new()),
-    );
+    let can_instance =
+        can_configurator.activate(C_TX_BUF.init(TxFdBuf::new()), C_RX_BUF.init(RxFdBuf::new()));
 
     // Setup can sender and receiver runners
     let can_receiver = UmbilicalCanReceiver::new(

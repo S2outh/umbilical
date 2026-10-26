@@ -17,7 +17,7 @@ embedded-alloc = { version = "0.7.0", default-features = false, features = ["llf
 
 embedded-io-async = { version = "0.7.0", features = ["defmt"] }
 
-embassy-nats = { git = "https://github.com/S2outh/embassy-nats.git", features = ["alloc"] }
+embedded-nats = { version = "1.0.0", features = ["defmt", "alloc"] }
 
 defmt = "1.0"
 defmt-rtt = "1.1"
